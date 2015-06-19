@@ -26,10 +26,17 @@ static int wakeup_interval = 100;
 static int reader_finish;
 static DECLARE_COMPLETION(read_start);
 static DECLARE_COMPLETION(read_done);
-
 static struct ring_buffer *buffer;
-static struct task_struct *producer;
-static struct task_struct *consumer;
+
+static void rb_producer_hammer_func(struct kthread_work *dummy);
+static struct kthread_worker *rb_producer_worker;
+static DEFINE_DELAYED_KTHREAD_WORK(rb_producer_hammer_work,
+				   rb_producer_hammer_func);
+
+static void rb_consumer_func(struct kthread_work *dummy);
+static struct kthread_worker *rb_consumer_worker;
+static DEFINE_KTHREAD_WORK(rb_consumer_work, rb_consumer_func);
+
 static unsigned long read;
 
 static unsigned int disable_reader;
@@ -61,6 +68,7 @@ MODULE_PARM_DESC(consumer_fifo, "fifo prio for consumer");
 static int read_events;
 
 static int test_error;
+static int test_end;
 
 #define TEST_ERROR()				\
 	do {					\
@@ -77,7 +85,7 @@ enum event_status {
 
 static bool break_test(void)
 {
-	return test_error || kthread_should_stop();
+	return test_error || test_end;
 }
 
 static enum event_status read_event(int cpu)
@@ -262,8 +270,8 @@ static void ring_buffer_producer(void)
 		end_time = ktime_get();
 
 		cnt++;
-		if (consumer && !(cnt % wakeup_interval))
-			wake_up_process(consumer);
+		if (rb_consumer_worker && !(cnt % wakeup_interval))
+			wake_up_process(rb_consumer_worker->task);
 
 #ifndef CONFIG_PREEMPT
 		/*
@@ -281,14 +289,14 @@ static void ring_buffer_producer(void)
 	} while (ktime_before(end_time, timeout) && !break_test());
 	trace_printk("End ring buffer hammer\n");
 
-	if (consumer) {
+	if (rb_consumer_worker) {
 		/* Init both completions here to avoid races */
 		init_completion(&read_start);
 		init_completion(&read_done);
 		/* the completions must be visible before the finish var */
 		smp_wmb();
 		reader_finish = 1;
-		wake_up_process(consumer);
+		wake_up_process(rb_consumer_worker->task);
 		wait_for_completion(&read_done);
 	}
 
@@ -366,68 +374,39 @@ static void ring_buffer_producer(void)
 	}
 }
 
-static void wait_to_die(void)
+static void rb_consumer_func(struct kthread_work *dummy)
 {
-	set_current_state(TASK_INTERRUPTIBLE);
-	while (!kthread_should_stop()) {
-		schedule();
-		set_current_state(TASK_INTERRUPTIBLE);
-	}
-	__set_current_state(TASK_RUNNING);
+	complete(&read_start);
+
+	ring_buffer_consumer();
 }
 
-static int ring_buffer_consumer_thread(void *arg)
+static void rb_producer_hammer_func(struct kthread_work *dummy)
 {
-	while (!break_test()) {
-		complete(&read_start);
+	if (break_test())
+		return;
 
-		ring_buffer_consumer();
+	ring_buffer_reset(buffer);
 
-		set_current_state(TASK_INTERRUPTIBLE);
-		if (break_test())
-			break;
-		schedule();
-	}
-	__set_current_state(TASK_RUNNING);
-
-	if (!kthread_should_stop())
-		wait_to_die();
-
-	return 0;
-}
-
-static int ring_buffer_producer_thread(void *arg)
-{
-	while (!break_test()) {
-		ring_buffer_reset(buffer);
-
-		if (consumer) {
-			wake_up_process(consumer);
-			wait_for_completion(&read_start);
-		}
-
-		ring_buffer_producer();
-		if (break_test())
-			goto out_kill;
-
-		trace_printk("Sleeping for 10 secs\n");
-		set_current_state(TASK_INTERRUPTIBLE);
-		if (break_test())
-			goto out_kill;
-		schedule_timeout(HZ * SLEEP_TIME);
+	if (rb_consumer_worker) {
+		queue_kthread_work(rb_consumer_worker, &rb_consumer_work);
+		wait_for_completion(&read_start);
 	}
 
-out_kill:
-	__set_current_state(TASK_RUNNING);
-	if (!kthread_should_stop())
-		wait_to_die();
+	ring_buffer_producer();
 
-	return 0;
+	if (break_test())
+		return;
+
+	trace_printk("Sleeping for 10 secs\n");
+	queue_delayed_kthread_work(rb_producer_worker,
+				   &rb_producer_hammer_work,
+				   HZ * SLEEP_TIME);
 }
 
 static int __init ring_buffer_benchmark_init(void)
 {
-	int ret;
+	int ret = 0;
 
 	/* make a one meg buffer in overwite mode */
 	buffer = ring_buffer_alloc(1000000, RB_FL_OVERWRITE);
@@ -435,19 +414,21 @@ static int __init ring_buffer_benchmark_init(void)
 		return -ENOMEM;
 
 	if (!disable_reader) {
-		consumer = kthread_create(ring_buffer_consumer_thread,
-					  NULL, "rb_consumer");
-		ret = PTR_ERR(consumer);
-		if (IS_ERR(consumer))
+		rb_consumer_worker = create_kthread_worker(0, "rb_consumer");
+		if (IS_ERR(rb_consumer_worker)) {
+			ret = PTR_ERR(rb_consumer_worker);
 			goto out_fail;
+		}
 	}
 
-	producer = kthread_run(ring_buffer_producer_thread,
-			       NULL, "rb_producer");
-	ret = PTR_ERR(producer);
-
-	if (IS_ERR(producer))
+	rb_producer_worker = create_kthread_worker(0, "rb_producer");
+	if (IS_ERR(rb_producer_worker)) {
+		ret = PTR_ERR(rb_producer_worker);
 		goto out_kill;
+	}
+
+	queue_delayed_kthread_work(rb_producer_worker,
+				   &rb_producer_hammer_work, 0);
 
 	/*
 	 * Run them as low-prio background tasks by default:
@@ -457,24 +438,26 @@ static int __init ring_buffer_benchmark_init(void)
 			struct sched_param param = {
 				.sched_priority = consumer_fifo
 			};
-			sched_setscheduler(consumer, SCHED_FIFO, &param);
+			sched_setscheduler(rb_consumer_worker->task,
+					   SCHED_FIFO, &param);
 		} else
-			set_user_nice(consumer, consumer_nice);
+			set_user_nice(rb_consumer_worker->task, consumer_nice);
 	}
 
 	if (producer_fifo >= 0) {
 		struct sched_param param = {
 			.sched_priority = producer_fifo
 		};
-		sched_setscheduler(producer, SCHED_FIFO, &param);
+		sched_setscheduler(rb_producer_worker->task,
+				   SCHED_FIFO, &param);
 	} else
-		set_user_nice(producer, producer_nice);
+		set_user_nice(rb_producer_worker->task, producer_nice);
 
 	return 0;
 
  out_kill:
-	if (consumer)
-		kthread_stop(consumer);
+	if (rb_consumer_worker)
+		destroy_kthread_worker(rb_consumer_worker);
 
  out_fail:
 	ring_buffer_free(buffer);
@@ -483,9 +466,11 @@ static int __init ring_buffer_benchmark_init(void)
 
 static void __exit ring_buffer_benchmark_exit(void)
 {
-	kthread_stop(producer);
-	if (consumer)
-		kthread_stop(consumer);
+	test_end = 1;
+	cancel_delayed_kthread_work_sync(&rb_producer_hammer_work);
+	destroy_kthread_worker(rb_producer_worker);
+	if (rb_consumer_worker)
+		destroy_kthread_worker(rb_consumer_worker);
 	ring_buffer_free(buffer);
 }
 
