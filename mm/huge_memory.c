@@ -57,10 +57,16 @@ static unsigned int khugepaged_full_scans;
 static unsigned int khugepaged_scan_sleep_millisecs __read_mostly = 10000;
 /* during fragmentation poll the hugepage allocator once every minute */
 static unsigned int khugepaged_alloc_sleep_millisecs __read_mostly = 60000;
-static struct task_struct *khugepaged_thread __read_mostly;
+
+static void khugepaged_do_scan_func(struct kthread_work *dummy);
+static void khugepaged_cleanup_func(struct kthread_work *dummy);
+static struct kthread_worker *khugepaged_worker;
+static struct delayed_kthread_work khugepaged_do_scan_work;
+static struct kthread_work khugepaged_cleanup_work;
+
 static DEFINE_MUTEX(khugepaged_mutex);
 static DEFINE_SPINLOCK(khugepaged_mm_lock);
-static DECLARE_WAIT_QUEUE_HEAD(khugepaged_wait);
+static DECLARE_WAIT_QUEUE_HEAD(khugepaged_alloc_wait);
 /*
  * default collapse hugepages if there is at least one pte mapped like
  * it would have happened if the vma was large enough during page
@@ -68,7 +74,6 @@ static DECLARE_WAIT_QUEUE_HEAD(khugepaged_wait);
  */
 static unsigned int khugepaged_max_ptes_none __read_mostly = HPAGE_PMD_NR-1;
 
-static int khugepaged(void *none);
 static int khugepaged_slab_init(void);
 static void khugepaged_slab_exit(void);
 
@@ -144,29 +149,55 @@ static void set_recommended_min_free_kbytes(void)
 	setup_per_zone_wmarks();
 }
 
+static int khugepaged_has_work(void)
+{
+	return !list_empty(&khugepaged_scan.mm_head);
+}
+
 static int start_stop_khugepaged(void)
 {
+	struct kthread_worker *worker;
 	int err = 0;
-	if (khugepaged_enabled()) {
-		if (!khugepaged_thread)
-			khugepaged_thread = kthread_run(khugepaged, NULL,
-							"khugepaged");
-		if (IS_ERR(khugepaged_thread)) {
-			pr_err("khugepaged: kthread_run(khugepaged) failed\n");
-			err = PTR_ERR(khugepaged_thread);
-			khugepaged_thread = NULL;
-			goto fail;
-		}
 
-		if (!list_empty(&khugepaged_scan.mm_head))
-			wake_up_interruptible(&khugepaged_wait);
+	if (khugepaged_enabled()) {
+		if (khugepaged_worker)
+			goto out;
+
+		worker = create_kthread_worker(KTW_FREEZABLE, "khugepaged");
+		if (IS_ERR(worker)) {
+			pr_err("khugepaged: failed to create kthread worker\n");
+			goto out;
+		}
+		set_user_nice(worker->task, MAX_NICE);
+
+		/* Always initialize the works when the worker is started. */
+		init_delayed_kthread_work(&khugepaged_do_scan_work,
+					  khugepaged_do_scan_func);
+		init_kthread_work(&khugepaged_cleanup_work,
+				  khugepaged_cleanup_func);
+
+		/* Make the worker public and check for work synchronously. */
+		spin_lock(&khugepaged_mm_lock);
+		khugepaged_worker = worker;
+		if (khugepaged_has_work())
+			queue_delayed_kthread_work(worker,
+						   &khugepaged_do_scan_work,
+						   0);
+		spin_unlock(&khugepaged_mm_lock);
 
 		set_recommended_min_free_kbytes();
-	} else if (khugepaged_thread) {
-		kthread_stop(khugepaged_thread);
-		khugepaged_thread = NULL;
+	} else if (khugepaged_worker) {
+		/* First, stop others from using the worker. */
+		spin_lock(&khugepaged_mm_lock);
+		worker = khugepaged_worker;
+		khugepaged_worker = NULL;
+		spin_unlock(&khugepaged_mm_lock);
+
+		cancel_delayed_kthread_work_sync(&khugepaged_do_scan_work);
+		queue_kthread_work(worker, &khugepaged_cleanup_work);
+		destroy_kthread_worker(worker);
 	}
-fail:
+out:
 	return err;
 }
 
@@ -425,7 +456,13 @@ static ssize_t scan_sleep_millisecs_store(struct kobject *kobj,
 		return -EINVAL;
 
 	khugepaged_scan_sleep_millisecs = msecs;
-	wake_up_interruptible(&khugepaged_wait);
+
+	spin_lock(&khugepaged_mm_lock);
+	if (khugepaged_worker && khugepaged_has_work())
+		mod_delayed_kthread_work(khugepaged_worker,
+					 &khugepaged_do_scan_work,
+					 0);
+	spin_unlock(&khugepaged_mm_lock);
 
 	return count;
 }
@@ -452,7 +489,7 @@ static ssize_t alloc_sleep_millisecs_store(struct kobject *kobj,
 		return -EINVAL;
 
 	khugepaged_alloc_sleep_millisecs = msecs;
-	wake_up_interruptible(&khugepaged_wait);
+	wake_up_interruptible(&khugepaged_alloc_wait);
 
 	return count;
 }
@@ -2094,7 +2131,7 @@ static inline int khugepaged_test_exit(struct mm_struct *mm)
 int __khugepaged_enter(struct mm_struct *mm)
 {
 	struct mm_slot *mm_slot;
-	int wakeup;
+	int has_work;
 
 	mm_slot = alloc_mm_slot();
 	if (!mm_slot)
@@ -2113,13 +2150,15 @@ int __khugepaged_enter(struct mm_struct *mm)
 	 * Insert just behind the scanning cursor, to let the area settle
 	 * down a little.
 	 */
-	wakeup = list_empty(&khugepaged_scan.mm_head);
+	has_work = khugepaged_has_work();
 	list_add_tail(&mm_slot->mm_node, &khugepaged_scan.mm_head);
-	spin_unlock(&khugepaged_mm_lock);
 
 	atomic_inc(&mm->mm_count);
-	if (wakeup)
-		wake_up_interruptible(&khugepaged_wait);
+	if (khugepaged_worker && has_work)
+		mod_delayed_kthread_work(khugepaged_worker,
+					 &khugepaged_do_scan_work,
+					 0);
+	spin_unlock(&khugepaged_mm_lock);
 
 	return 0;
 }
@@ -2335,10 +2374,10 @@ static void khugepaged_alloc_sleep(void)
 {
 	DEFINE_WAIT(wait);
 
-	add_wait_queue(&khugepaged_wait, &wait);
+	add_wait_queue(&khugepaged_alloc_wait, &wait);
 	freezable_schedule_timeout_interruptible(
 		msecs_to_jiffies(khugepaged_alloc_sleep_millisecs));
-	remove_wait_queue(&khugepaged_wait, &wait);
+	remove_wait_queue(&khugepaged_alloc_wait, &wait);
 }
 
 static int khugepaged_node_load[MAX_NUMNODES];
@@ -2847,19 +2886,7 @@ breakouterloop_mmap_sem:
 	return progress;
 }
 
-static int khugepaged_has_work(void)
-{
-	return !list_empty(&khugepaged_scan.mm_head) &&
-		khugepaged_enabled();
-}
-
-static int khugepaged_wait_event(void)
-{
-	return !list_empty(&khugepaged_scan.mm_head) ||
-		kthread_should_stop();
-}
-
-static void khugepaged_do_scan(void)
+static void khugepaged_do_scan_func(struct kthread_work *dummy)
 {
 	struct page *hpage = NULL;
 	unsigned int progress = 0, pass_through_head = 0;
@@ -2874,7 +2901,7 @@ static void khugepaged_do_scan(void)
 
 		cond_resched();
 
-		if (unlikely(kthread_should_stop() || try_to_freeze()))
+		if (unlikely(!khugepaged_enabled() || try_to_freeze()))
 			break;
 
 		spin_lock(&khugepaged_mm_lock);
@@ -2891,35 +2918,23 @@ static void khugepaged_do_scan(void)
 
 	if (!IS_ERR_OR_NULL(hpage))
 		put_page(hpage);
-}
 
-static void khugepaged_wait_work(void)
-{
 	if (khugepaged_has_work()) {
-		if (!khugepaged_scan_sleep_millisecs)
-			return;
 
-		wait_event_freezable_timeout(khugepaged_wait,
-					     kthread_should_stop(),
-			msecs_to_jiffies(khugepaged_scan_sleep_millisecs));
-		return;
+		unsigned long delay = 0;
+
+		if (khugepaged_scan_sleep_millisecs)
+			delay = msecs_to_jiffies(khugepaged_scan_sleep_millisecs);
+
+		queue_delayed_kthread_work(khugepaged_worker,
+					   &khugepaged_do_scan_work,
+					   delay);
 	}
-
-	if (khugepaged_enabled())
-		wait_event_freezable(khugepaged_wait, khugepaged_wait_event());
 }
 
-static int khugepaged(void *none)
+static void khugepaged_cleanup_func(struct kthread_work *dummy)
 {
 	struct mm_slot *mm_slot;
-
-	set_freezable();
-	set_user_nice(current, MAX_NICE);
-
-	while (!kthread_should_stop()) {
-		khugepaged_do_scan();
-		khugepaged_wait_work();
-	}
 
 	spin_lock(&khugepaged_mm_lock);
 	mm_slot = khugepaged_scan.mm_slot;
@@ -2927,7 +2942,6 @@ static int khugepaged(void *none)
 	if (mm_slot)
 		collect_mm_slot(mm_slot);
 	spin_unlock(&khugepaged_mm_lock);
-	return 0;
 }
 
 static void __split_huge_zero_page_pmd(struct vm_area_struct *vma,
