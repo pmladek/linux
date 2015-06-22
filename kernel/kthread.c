@@ -556,6 +556,7 @@ void __init_kthread_worker(struct kthread_worker *worker,
 				const char *name,
 				struct lock_class_key *key)
 {
+	worker->flags = 0;
 	spin_lock_init(&worker->lock);
 	lockdep_set_class_and_name(&worker->lock, key, name);
 	INIT_LIST_HEAD(&worker->work_list);
@@ -605,6 +606,10 @@ int kthread_worker_fn(void *worker_ptr)
 	 */
 	WARN_ON(worker->task && worker->task != current);
 	worker->task = current;
+
+	if (worker->flags & KTW_FREEZABLE)
+		set_freezable();
+
 repeat:
 	set_current_state(TASK_INTERRUPTIBLE);	/* mb paired w/ kthread_stop */
 
@@ -638,7 +643,8 @@ repeat:
 EXPORT_SYMBOL_GPL(kthread_worker_fn);
 
 static struct kthread_worker *
-__create_kthread_worker(int cpu, const char namefmt[], va_list args)
+__create_kthread_worker(unsigned int flags, int cpu,
+			const char namefmt[], va_list args)
 {
 	struct kthread_worker *worker;
 	struct task_struct *task;
@@ -658,6 +664,7 @@ __create_kthread_worker(int cpu, const char namefmt[], va_list args)
 	if (IS_ERR(task))
 		goto fail_task;
 
+	worker->flags = flags;
 	worker->task = task;
 	wake_up_process(task);
 	return worker;
@@ -676,13 +683,13 @@ fail_task:
  * the worker was SIGKILLed.
  */
 struct kthread_worker *
-create_kthread_worker(const char namefmt[], ...)
+create_kthread_worker(unsigned int flags, const char namefmt[], ...)
 {
 	struct kthread_worker *worker;
 	va_list args;
 
 	va_start(args, namefmt);
-	worker = __create_kthread_worker(-1, namefmt, args);
+	worker = __create_kthread_worker(flags, -1, namefmt, args);
 	va_end(args);
 
 	return worker;
@@ -706,12 +713,12 @@ EXPORT_SYMBOL(create_kthread_worker);
  * ERR_PTR(-EINVAL) on invalid @cpu.
  */
 struct kthread_worker *
-create_kthread_worker_on_cpu(int cpu, const char namefmt[])
+create_kthread_worker_on_cpu(unsigned int flags, int cpu, const char namefmt[])
 {
 	if (cpu < 0 || cpu > num_possible_cpus())
 		return ERR_PTR(-EINVAL);
 
-	return __create_kthread_worker(cpu, namefmt, NULL);
+	return __create_kthread_worker(flags, cpu, namefmt, NULL);
 }
 EXPORT_SYMBOL(create_kthread_worker_on_cpu);
 
