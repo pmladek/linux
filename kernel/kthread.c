@@ -567,23 +567,24 @@ EXPORT_SYMBOL_GPL(__init_kthread_worker);
  * kthread_worker_fn - kthread function to process kthread_worker
  * @worker_ptr: pointer to initialized kthread_worker
  *
- * This function can be used as @threadfn to kthread_create() or
- * kthread_run() with @worker_ptr argument pointing to an initialized
- * kthread_worker.  The started kthread will process work_list until
- * the it is stopped with kthread_stop().  A kthread can also call
- * this function directly after extra initialization.
+ * This function implements the main cycle of kthread worker. It processes
+ * work_list until it is stopped with kthread_stop(). It sleeps when the queue
+ * is empty.
  *
- * Different kthreads can be used for the same kthread_worker as long
- * as there's only one kthread attached to it at any given time.  A
- * kthread_worker without an attached kthread simply collects queued
- * kthread_works.
+ * The works are not allowed to keep any locks, disable preemption or interrupts
+ * when they finish. There is defined a safe point for freezing when one work
+ * finishes and before a new one is started.
  */
 int kthread_worker_fn(void *worker_ptr)
 {
 	struct kthread_worker *worker = worker_ptr;
 	struct kthread_work *work;
 
-	WARN_ON(worker->task);
+	/*
+	 * FIXME: Update the check and remove the assignment when all kthread
+	 * worker users are created using create_kthread_worker*() functions.
+	 */
+	WARN_ON(worker->task && worker->task != current);
 	worker->task = current;
 repeat:
 	set_current_state(TASK_INTERRUPTIBLE);	/* mb paired w/ kthread_stop */
@@ -616,6 +617,84 @@ repeat:
 	goto repeat;
 }
 EXPORT_SYMBOL_GPL(kthread_worker_fn);
+
+static struct kthread_worker *
+__create_kthread_worker(int cpu, const char namefmt[], va_list args)
+{
+	struct kthread_worker *worker;
+	struct task_struct *task;
+
+	worker = kzalloc(sizeof(*worker), GFP_KERNEL);
+	if (!worker)
+		return ERR_PTR(-ENOMEM);
+
+	init_kthread_worker(worker);
+
+	if (cpu >= 0)
+		task = kthread_create_on_cpu(kthread_worker_fn, worker,
+					     cpu, namefmt);
+	else
+		task = __kthread_create_on_node(kthread_worker_fn, worker,
+						-1, namefmt, args);
+	if (IS_ERR(task))
+		goto fail_task;
+
+	worker->task = task;
+	wake_up_process(task);
+	return worker;
+
+fail_task:
+	kfree(worker);
+	return ERR_CAST(task);
+}
+
+/**
+ * create_kthread_worker - create a kthread worker
+ * @namefmt: printf-style name for the kthread worker (task).
+ *
+ * Returns pointer to an allocated worker on success, ERR_PTR(-ENOMEM) when
+ * the needed structures could not get allocated, and ERR_PTR(-EINTR) when
+ * the worker was SIGKILLed.
+ */
+struct kthread_worker *
+create_kthread_worker(const char namefmt[], ...)
+{
+	struct kthread_worker *worker;
+	va_list args;
+
+	va_start(args, namefmt);
+	worker = __create_kthread_worker(-1, namefmt, args);
+	va_end(args);
+
+	return worker;
+}
+EXPORT_SYMBOL(create_kthread_worker);
+
+/**
+ * create_kthread_worker_on_cpu - create a kthread worker and bind it
+ *	it to a given CPU and the associated NUMA node.
+ * @cpu: CPU number
+ * @namefmt: printf-style name for the kthread worker (task).
+ *
+ * Use a valid CPU number if you want to bind the kthread worker
+ * to the given CPU and the associated NUMA node.
+ *
+ * @namefmt might include one "%d" that will get replaced by CPU number.
+ *
+ * Returns pointer to allocated worker on success, ERR_PTR when the CPU
+ * number is not valid, ERR_PTR(-ENOMEM) when the needed structures could
+ * not get allocated, ERR_PTR(-EINTR) when the worker was SIGKILLed, and
+ * ERR_PTR(-EINVAL) on invalid @cpu.
+ */
+struct kthread_worker *
+create_kthread_worker_on_cpu(int cpu, const char namefmt[])
+{
+	if (cpu < 0 || cpu > num_possible_cpus())
+		return ERR_PTR(-EINVAL);
+
+	return __create_kthread_worker(cpu, namefmt, NULL);
+}
+EXPORT_SYMBOL(create_kthread_worker_on_cpu);
 
 /* insert @work before @pos in @worker */
 static void insert_kthread_work(struct kthread_worker *worker,
