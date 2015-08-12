@@ -77,6 +77,7 @@ struct kthread_work {
 	kthread_work_func_t	func;
 	struct kthread_worker	*worker;
 	struct timer_list	*timer;
+	int			canceling;
 };
 
 struct delayed_kthread_work {
@@ -169,6 +170,9 @@ bool queue_delayed_kthread_work(struct kthread_worker *worker,
 
 void flush_kthread_work(struct kthread_work *work);
 void flush_kthread_worker(struct kthread_worker *worker);
+
+bool cancel_kthread_work_sync(struct kthread_work *work);
+bool cancel_delayed_kthread_work_sync(struct delayed_kthread_work *work);
 
 void destroy_kthread_worker(struct kthread_worker *worker);
 
