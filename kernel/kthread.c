@@ -1013,6 +1013,56 @@ out:
 	return ret;
 }
 
+/**
+ * mod_delayed_kthread_work - modify delay of or queue a delayed kthread work
+ * @worker: kthread worker to use
+ * @dwork: delayed kthread work to queue
+ * @delay: number of jiffies to wait before queuing
+ *
+ * If @dwork is idle, equivalent to queue_delayed_kthread work(). Otherwise,
+ * modify @dwork's timer so that it expires after @delay. If @delay is zero,
+ * @work is guaranteed to be queued immediately.
+ *
+ * Return: %false if @dwork was idle and queued. Return %true if @dwork was
+ * pending and its timer was modified.
+ *
+ * A special case is when cancel_work_sync() is running in parallel.
+ * It blocks further queuing. We let the cancel() win and return %false.
+ * The caller is supposed to synchronize these operations a reasonable way.
+ *
+ * This function is safe to call from any context including IRQ handler.
+ * See try_to_grab_pending_kthread_work() for details.
+ */
+bool mod_delayed_kthread_work(struct kthread_worker *worker,
+			      struct delayed_kthread_work *dwork,
+			      unsigned long delay)
+{
+	struct kthread_work *work = &dwork->work;
+	unsigned long flags;
+	int ret = 0;
+
+try_again:
+	spin_lock_irqsave(&worker->lock, flags);
+	WARN_ON_ONCE(work->worker && work->worker != worker);
+
+	if (work->canceling)
+		goto out;
+
+	ret = try_to_cancel_kthread_work(work, &worker->lock, &flags);
+	if (ret == -EAGAIN)
+		goto try_again;
+
+	if (work->canceling)
+		ret = 0;
+	else
+		__queue_delayed_kthread_work(worker, dwork, delay);
+
+out:
+	spin_unlock_irqrestore(&worker->lock, flags);
+	return ret;
+}
+EXPORT_SYMBOL_GPL(mod_delayed_kthread_work);
+
 static bool __cancel_kthread_work_sync(struct kthread_work *work)
 {
 	struct kthread_worker *worker;
