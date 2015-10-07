@@ -217,7 +217,8 @@ static int kmemleak_error;
 static unsigned long min_addr = ULONG_MAX;
 static unsigned long max_addr;
 
-static struct task_struct *scan_thread;
+static struct kthread_worker *kmemleak_scan_worker;
+static struct delayed_kthread_work kmemleak_scan_work;
 /* used to avoid reporting of recently allocated objects */
 static unsigned long jiffies_min_age;
 static unsigned long jiffies_last_scan;
@@ -1471,54 +1472,48 @@ static void kmemleak_scan(void)
 }
 
 /*
- * Thread function performing automatic memory scanning. Unreferenced objects
- * at the end of a memory scan are reported but only the first time.
+ * Kthread worker function performing automatic memory scanning.
+ * Unreferenced objects at the end of a memory scan are reported
+ * but only the first time.
  */
-static int kmemleak_scan_thread(void *arg)
+static void kmemleak_scan_func(struct kthread_work *dummy)
 {
-	static int first_run = 1;
+	mutex_lock(&scan_mutex);
+	kmemleak_scan();
+	mutex_unlock(&scan_mutex);
 
-	pr_info("Automatic memory scanning thread started\n");
-	set_user_nice(current, 10);
-
-	/*
-	 * Wait before the first scan to allow the system to fully initialize.
-	 */
-	if (first_run) {
-		first_run = 0;
-		ssleep(SECS_FIRST_SCAN);
-	}
-
-	while (!kthread_should_stop()) {
-		signed long timeout = jiffies_scan_wait;
-
-		mutex_lock(&scan_mutex);
-		kmemleak_scan();
-		mutex_unlock(&scan_mutex);
-
-		/* wait before the next scan */
-		while (timeout && !kthread_should_stop())
-			timeout = schedule_timeout_interruptible(timeout);
-	}
-
-	pr_info("Automatic memory scanning thread ended\n");
-
-	return 0;
+	queue_delayed_kthread_work(kmemleak_scan_worker, &kmemleak_scan_work,
+				   jiffies_scan_wait);
 }
 
 /*
  * Start the automatic memory scanning thread. This function must be called
  * with the scan_mutex held.
  */
-static void start_scan_thread(void)
+static void start_scan_thread(bool boot)
 {
-	if (scan_thread)
+	unsigned long timeout = 0;
+
+	if (kmemleak_scan_worker)
 		return;
-	scan_thread = kthread_run(kmemleak_scan_thread, NULL, "kmemleak");
-	if (IS_ERR(scan_thread)) {
-		pr_warning("Failed to create the scan thread\n");
-		scan_thread = NULL;
+
+	init_delayed_kthread_work(&kmemleak_scan_work, kmemleak_scan_func);
+	kmemleak_scan_worker = create_kthread_worker(0, "kmemleak");
+	if (IS_ERR(kmemleak_scan_worker)) {
+		pr_warn("Failed to create the memory scan worker\n");
+		kmemleak_scan_worker = NULL;
 	}
+	pr_info("Automatic memory scanning thread started\n");
+	set_user_nice(kmemleak_scan_worker->task, 10);
+
+	/*
+	 * Wait before the first scan to allow the system to fully initialize.
+	 */
+	if (boot)
+		timeout = msecs_to_jiffies(SECS_FIRST_SCAN * MSEC_PER_SEC);
+
+	queue_delayed_kthread_work(kmemleak_scan_worker, &kmemleak_scan_work,
+				   timeout);
 }
 
 /*
@@ -1527,10 +1522,14 @@ static void start_scan_thread(void)
  */
 static void stop_scan_thread(void)
 {
-	if (scan_thread) {
-		kthread_stop(scan_thread);
-		scan_thread = NULL;
-	}
+	if (!kmemleak_scan_worker)
+		return;
+
+	cancel_delayed_kthread_work_sync(&kmemleak_scan_work);
+	destroy_kthread_worker(kmemleak_scan_worker);
+	kmemleak_scan_worker = NULL;
+
+	pr_info("Automatic memory scanning thread ended\n");
 }
 
 /*
@@ -1727,7 +1726,7 @@ static ssize_t kmemleak_write(struct file *file, const char __user *user_buf,
 	else if (strncmp(buf, "stack=off", 9) == 0)
 		kmemleak_stack_scan = 0;
 	else if (strncmp(buf, "scan=on", 7) == 0)
-		start_scan_thread();
+		start_scan_thread(false);
 	else if (strncmp(buf, "scan=off", 8) == 0)
 		stop_scan_thread();
 	else if (strncmp(buf, "scan=", 5) == 0) {
@@ -1739,7 +1738,7 @@ static ssize_t kmemleak_write(struct file *file, const char __user *user_buf,
 		stop_scan_thread();
 		if (secs) {
 			jiffies_scan_wait = msecs_to_jiffies(secs * 1000);
-			start_scan_thread();
+			start_scan_thread(false);
 		}
 	} else if (strncmp(buf, "scan", 4) == 0)
 		kmemleak_scan();
@@ -1963,7 +1962,7 @@ static int __init kmemleak_late_init(void)
 	if (!dentry)
 		pr_warning("Failed to create the debugfs kmemleak file\n");
 	mutex_lock(&scan_mutex);
-	start_scan_thread();
+	start_scan_thread(true);
 	mutex_unlock(&scan_mutex);
 
 	pr_info("Kernel memory leak detector initialized\n");
