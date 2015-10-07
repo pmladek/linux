@@ -41,7 +41,9 @@ int __read_mostly sysctl_hung_task_warnings = 10;
 
 static int __read_mostly did_panic;
 
-static struct task_struct *watchdog_task;
+static struct kthread_worker *watchdog_worker;
+static void watchdog_func(struct kthread_work *dummy);
+static DEFINE_DELAYED_KTHREAD_WORK(watchdog_work, watchdog_func);
 
 /*
  * Should we panic (and reboot, if panic_timeout= is set) when a
@@ -205,7 +207,9 @@ int proc_dohung_task_timeout_secs(struct ctl_table *table, int write,
 	if (ret || !write)
 		goto out;
 
-	wake_up_process(watchdog_task);
+	if (watchdog_worker)
+		mod_delayed_kthread_work(watchdog_worker, &watchdog_work,
+			 timeout_jiffies(sysctl_hung_task_timeout_secs));
 
  out:
 	return ret;
@@ -222,30 +226,35 @@ EXPORT_SYMBOL_GPL(reset_hung_task_detector);
 /*
  * kthread which checks for tasks stuck in D state
  */
-static int watchdog(void *dummy)
+static void watchdog_func(struct kthread_work *dummy)
 {
-	set_user_nice(current, 0);
+	unsigned long timeout = sysctl_hung_task_timeout_secs;
 
-	for ( ; ; ) {
-		unsigned long timeout = sysctl_hung_task_timeout_secs;
+	if (atomic_xchg(&reset_hung_task, 0))
+		goto next;
 
-		while (schedule_timeout_interruptible(timeout_jiffies(timeout)))
-			timeout = sysctl_hung_task_timeout_secs;
+	check_hung_uninterruptible_tasks(timeout);
 
-		if (atomic_xchg(&reset_hung_task, 0))
-			continue;
-
-		check_hung_uninterruptible_tasks(timeout);
-	}
-
-	return 0;
+next:
+	queue_delayed_kthread_work(watchdog_worker, &watchdog_work,
+				   timeout_jiffies(timeout));
 }
 
 static int __init hung_task_init(void)
 {
-	atomic_notifier_chain_register(&panic_notifier_list, &panic_block);
-	watchdog_task = kthread_run(watchdog, NULL, "khungtaskd");
+	struct kthread_worker *worker;
 
+	atomic_notifier_chain_register(&panic_notifier_list, &panic_block);
+	worker = create_kthread_worker(0, "khungtaskd");
+	if (IS_ERR(worker)) {
+		pr_warn("Failed to create khungtaskd\n");
+		goto out;
+	}
+	watchdog_worker = worker;
+	set_user_nice(worker->task, 0);
+	queue_delayed_kthread_work(worker, &watchdog_work, 0);
+
+out:
 	return 0;
 }
 subsys_initcall(hung_task_init);
