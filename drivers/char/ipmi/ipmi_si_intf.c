@@ -302,7 +302,9 @@ struct smi_info {
 	/* Counters and things for the proc filesystem. */
 	atomic_t stats[SI_NUM_STATS];
 
-	struct task_struct *thread;
+	struct kthread_worker *worker;
+	struct delayed_kthread_work work;
+	struct timespec64 busy_until;
 
 	struct list_head link;
 	union ipmi_smi_info_union addr_info;
@@ -427,8 +429,8 @@ static void start_new_msg(struct smi_info *smi_info, unsigned char *msg,
 {
 	smi_mod_timer(smi_info, jiffies + SI_TIMEOUT_JIFFIES);
 
-	if (smi_info->thread)
-		wake_up_process(smi_info->thread);
+	if (smi_info->worker)
+		mod_delayed_kthread_work(smi_info->worker, &smi_info->work, 0);
 
 	smi_info->handlers->start_transaction(smi_info->si_sm, msg, size);
 }
@@ -951,8 +953,9 @@ static void check_start_timer_thread(struct smi_info *smi_info)
 	if (smi_info->si_state == SI_NORMAL && smi_info->curr_msg == NULL) {
 		smi_mod_timer(smi_info, jiffies + SI_TIMEOUT_JIFFIES);
 
-		if (smi_info->thread)
-			wake_up_process(smi_info->thread);
+		if (smi_info->worker)
+			mod_delayed_kthread_work(smi_info->worker,
+						 &smi_info->work, 0);
 
 		start_next_msg(smi_info);
 		smi_event_handler(smi_info, 0);
@@ -1030,10 +1033,10 @@ static inline int ipmi_si_is_busy(struct timespec64 *ts)
 }
 
 static inline int ipmi_thread_busy_wait(enum si_sm_result smi_result,
-					const struct smi_info *smi_info,
-					struct timespec64 *busy_until)
+					struct smi_info *smi_info)
 {
 	unsigned int max_busy_us = 0;
+	struct timespec64 *busy_until = &smi_info->busy_until;
 
 	if (smi_info->intf_num < num_max_busy_us)
 		max_busy_us = kipmid_max_busy_us[smi_info->intf_num];
@@ -1064,52 +1067,48 @@ static inline int ipmi_thread_busy_wait(enum si_sm_result smi_result,
  * (if that is enabled).  See the paragraph on kimid_max_busy_us in
  * Documentation/IPMI.txt for details.
  */
-static int ipmi_thread(void *data)
+static void ipmi_kthread_worker_func(struct kthread_work *work)
 {
-	struct smi_info *smi_info = data;
+	struct smi_info *smi_info = container_of(work, struct smi_info,
+						 work.work);
 	unsigned long flags;
 	enum si_sm_result smi_result;
-	struct timespec64 busy_until;
+	int busy_wait;
 
-	ipmi_si_set_not_busy(&busy_until);
-	set_user_nice(current, MAX_NICE);
-	while (!kthread_should_stop()) {
-		int busy_wait;
+next:
+	spin_lock_irqsave(&(smi_info->si_lock), flags);
+	smi_result = smi_event_handler(smi_info, 0);
 
-		spin_lock_irqsave(&(smi_info->si_lock), flags);
-		smi_result = smi_event_handler(smi_info, 0);
+	/*
+	 * If the driver is doing something, there is a possible
+	 * race with the timer.  If the timer handler see idle,
+	 * and the thread here sees something else, the timer
+	 * handler won't restart the timer even though it is
+	 * required.  So start it here if necessary.
+	 */
+	if (smi_result != SI_SM_IDLE && !smi_info->timer_running)
+		smi_mod_timer(smi_info, jiffies + SI_TIMEOUT_JIFFIES);
 
-		/*
-		 * If the driver is doing something, there is a possible
-		 * race with the timer.  If the timer handler see idle,
-		 * and the thread here sees something else, the timer
-		 * handler won't restart the timer even though it is
-		 * required.  So start it here if necessary.
-		 */
-		if (smi_result != SI_SM_IDLE && !smi_info->timer_running)
-			smi_mod_timer(smi_info, jiffies + SI_TIMEOUT_JIFFIES);
+	spin_unlock_irqrestore(&(smi_info->si_lock), flags);
+	busy_wait = ipmi_thread_busy_wait(smi_result, smi_info);
 
-		spin_unlock_irqrestore(&(smi_info->si_lock), flags);
-		busy_wait = ipmi_thread_busy_wait(smi_result, smi_info,
-						  &busy_until);
-		if (smi_result == SI_SM_CALL_WITHOUT_DELAY)
-			; /* do nothing */
-		else if (smi_result == SI_SM_CALL_WITH_DELAY && busy_wait)
-			schedule();
-		else if (smi_result == SI_SM_IDLE) {
-			if (atomic_read(&smi_info->need_watch)) {
-				schedule_timeout_interruptible(100);
-			} else {
-				/* Wait to be woken up when we are needed. */
-				__set_current_state(TASK_INTERRUPTIBLE);
-				schedule();
-			}
-		} else
-			schedule_timeout_interruptible(1);
+	if (smi_result == SI_SM_CALL_WITHOUT_DELAY)
+		goto next;
+	if (smi_result == SI_SM_CALL_WITH_DELAY && busy_wait) {
+		queue_delayed_kthread_work(smi_info->worker,
+					   &smi_info->work, 0);
+	} else if (smi_result == SI_SM_IDLE) {
+		if (atomic_read(&smi_info->need_watch)) {
+			queue_delayed_kthread_work(smi_info->worker,
+						   &smi_info->work, 100);
+		} else {
+			/* Nope. Wait to be queued when we are needed. */
+		}
+	} else {
+		queue_delayed_kthread_work(smi_info->worker,
+					   &smi_info->work, 1);
 	}
-	return 0;
 }
-
 
 static void poll(void *send_info)
 {
@@ -1251,17 +1250,30 @@ static int smi_start_processing(void       *send_info,
 		enable = 1;
 
 	if (enable) {
-		new_smi->thread = kthread_run(ipmi_thread, new_smi,
-					      "kipmi%d", new_smi->intf_num);
-		if (IS_ERR(new_smi->thread)) {
+		struct kthread_worker *worker;
+
+		worker = create_kthread_worker(0, "kipmi%d",
+					       new_smi->intf_num);
+
+		if (IS_ERR(worker)) {
 			dev_notice(new_smi->dev, "Could not start"
 				   " kernel thread due to error %ld, only using"
 				   " timers to drive the interface\n",
-				   PTR_ERR(new_smi->thread));
-			new_smi->thread = NULL;
+				   PTR_ERR(worker));
+			goto out;
 		}
+
+		ipmi_si_set_not_busy(&new_smi->busy_until);
+		set_user_nice(worker->task, MAX_NICE);
+
+		init_delayed_kthread_work(&new_smi->work,
+					  ipmi_kthread_worker_func);
+		queue_delayed_kthread_work(worker, &new_smi->work, 0);
+
+		new_smi->worker = worker;
 	}
 
+out:
 	return 0;
 }
 
@@ -3436,8 +3448,13 @@ static void check_for_broken_irqs(struct smi_info *smi_info)
 
 static inline void wait_for_timer_and_thread(struct smi_info *smi_info)
 {
-	if (smi_info->thread != NULL)
-		kthread_stop(smi_info->thread);
+	if (smi_info->worker != NULL) {
+		struct kthread_worker *worker = smi_info->worker;
+
+		smi_info->worker = NULL;
+		cancel_delayed_kthread_work_sync(&smi_info->work);
+		destroy_kthread_worker(worker);
+	}
 	if (smi_info->timer_running)
 		del_timer_sync(&smi_info->si_timer);
 }
