@@ -139,7 +139,8 @@ struct r592_device {
 	spinlock_t irq_lock;
 	struct timer_list detect_timer;
 
-	struct task_struct *io_thread;
+	struct kthread_worker *io_worker;
+	struct kthread_work io_work;
 	bool io_started;
 	bool parallel_mode;
 

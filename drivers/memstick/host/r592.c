@@ -563,40 +563,32 @@ out:
 	return;
 }
 
-/* Main request processing thread */
-static int r592_process_thread(void *data)
+/* Main request processing work */
+static void r592_process_func(struct kthread_work *work)
 {
 	int error;
-	struct r592_device *dev = (struct r592_device *)data;
+	struct r592_device *dev =
+		container_of(work, struct r592_device, io_work);
 
-	while (!kthread_should_stop()) {
-		if (!dev->io_started) {
-			dbg_verbose("IO: started");
-			dev->io_started = true;
-		}
-
-		set_current_state(TASK_INTERRUPTIBLE);
-		error = memstick_next_req(dev->host, &dev->req);
-
-		if (error) {
-			if (error == -ENXIO || error == -EAGAIN) {
-				dbg_verbose("IO: done");
-			} else {
-				dbg("IO: unknown error from "
-					"memstick_next_req %d", error);
-			}
-			dev->io_started = false;
-
-			if (kthread_should_stop())
-				set_current_state(TASK_RUNNING);
-
-			schedule();
-		} else {
-			set_current_state(TASK_RUNNING);
-			r592_execute_tpc(dev);
-		}
+	if (!dev->io_started) {
+		dbg_verbose("IO: started");
+		dev->io_started = true;
 	}
-	return 0;
+
+	error = memstick_next_req(dev->host, &dev->req);
+
+	if (error) {
+		if (error == -ENXIO || error == -EAGAIN) {
+			dbg_verbose("IO: done");
+		} else {
+			dbg("IO: unknown error from memstick_next_req %d",
+			    error);
+		}
+		dev->io_started = false;
+	} else {
+		r592_execute_tpc(dev);
+		queue_kthread_work(dev->io_worker, &dev->io_work);
+	}
 }
 
 /* Reprogram chip to detect change in card state */
@@ -721,7 +713,7 @@ static void r592_submit_req(struct memstick_host *host)
 	if (dev->req)
 		return;
 
-	wake_up_process(dev->io_thread);
+	queue_kthread_work(dev->io_worker, &dev->io_work);
 }
 
 static const struct pci_device_id r592_pci_id_tbl[] = {
@@ -779,9 +771,10 @@ static int r592_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	r592_check_dma(dev);
 
 	dev->io_started = false;
-	dev->io_thread = kthread_run(r592_process_thread, dev, "r592_io");
-	if (IS_ERR(dev->io_thread)) {
-		error = PTR_ERR(dev->io_thread);
+	init_kthread_work(&dev->io_work, r592_process_func);
+	dev->io_worker = create_kthread_worker(0, "r592_io");
+	if (IS_ERR(dev->io_worker)) {
+		error = PTR_ERR(dev->io_worker);
 		goto error5;
 	}
 
@@ -807,7 +800,7 @@ error6:
 		dma_free_coherent(&pdev->dev, PAGE_SIZE, dev->dummy_dma_page,
 			dev->dummy_dma_page_physical_address);
 
-	kthread_stop(dev->io_thread);
+	destroy_kthread_worker(dev->io_worker);
 error5:
 	iounmap(dev->mmio);
 error4:
@@ -827,7 +820,8 @@ static void r592_remove(struct pci_dev *pdev)
 
 	/* Stop the processing thread.
 	That ensures that we won't take any more requests */
-	kthread_stop(dev->io_thread);
+	cancel_kthread_work_sync(&dev->io_work);
+	destroy_kthread_worker(dev->io_worker);
 
 	r592_enable_device(dev, false);
 
