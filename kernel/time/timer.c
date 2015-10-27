@@ -778,6 +778,30 @@ static struct tvec_base *lock_timer_base(struct timer_list *timer,
 	}
 }
 
+/**
+ * timer_active - is a timer still in use?
+ * @timer: the timer in question
+ *
+ * timer_in_use() will tell whether the timer is pending or if the callback
+ * is curretly running.
+ *
+ * Use this function if you want to make sure that some resources
+ * will not longer get accessed by the timer callback. timer_pending()
+ * is not safe in this case.
+ */
+int timer_active(struct timer_list *timer)
+{
+	struct tvec_base *base;
+	unsigned long flags;
+	int ret;
+
+	base = lock_timer_base(timer, &flags);
+	ret = timer_pending(timer) || base->running_timer == timer;
+	spin_unlock_irqrestore(&base->lock, flags);
+
+	return ret;
+}
+
 static inline int
 __mod_timer(struct timer_list *timer, unsigned long expires,
 	    bool pending_only, int pinned)
