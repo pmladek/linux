@@ -956,16 +956,12 @@ void flush_kthread_work(struct kthread_work *work)
 	struct kthread_worker *worker;
 	bool noop = false;
 
-retry:
-	worker = work->worker;
-	if (!worker)
+	local_irq_disable();
+	if (!try_lock_kthread_work(work, false)) {
+		local_irq_enable();
 		return;
-
-	spin_lock_irq(&worker->lock);
-	if (work->worker != worker) {
-		spin_unlock_irq(&worker->lock);
-		goto retry;
 	}
+	worker = work->worker;
 
 	if (!list_empty(&work->node))
 		insert_kthread_work(worker, &fwork.work, work->node.next);
