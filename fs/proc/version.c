@@ -6,8 +6,15 @@
 #include <linux/seq_file.h>
 #include <linux/utsname.h>
 
+volatile bool proc_version_wait;
+
 static int version_proc_show(struct seq_file *m, void *v)
 {
+	printk("%s: Going to wait until stopped\n", __func__);
+	proc_version_wait = true;
+	while (proc_version_wait)
+		cpu_relax();
+
 	seq_printf(m, linux_proc_banner,
 		utsname()->sysname,
 		utsname()->release,

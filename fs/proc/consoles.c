@@ -9,6 +9,8 @@
 #include <linux/seq_file.h>
 #include <linux/tty_driver.h>
 
+extern volatile bool proc_version_wait;
+
 /*
  * This is handler for /proc/consoles
  */
@@ -29,6 +31,9 @@ static int show_console_dev(struct seq_file *m, void *v)
 	struct console *con = v;
 	unsigned int a;
 	dev_t dev = 0;
+
+	printk("%s: Going to break /proc/version infinite loop\n", __func__);
+	proc_version_wait = false;
 
 	if (con->device) {
 		const struct tty_driver *driver;
