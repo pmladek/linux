@@ -19,6 +19,7 @@ it.
    kernel-api
    workqueue
    watch_queue
+   printk-design
    printk-basics
    printk-formats
    printk-index
