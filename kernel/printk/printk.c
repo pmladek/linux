@@ -370,6 +370,7 @@ static int preferred_dev_console = -1;
 static int preferred_dev_console_prev = -1;
 static bool want_braille_console;
 int console_set_on_cmdline;
+bool user_wants_platform_console;
 EXPORT_SYMBOL(console_set_on_cmdline);
 
 /* Flag: console code may call schedule() */
@@ -2621,6 +2622,26 @@ static int __add_preferred_console(const char *name, const short idx,
 					brl_options, pref_type);
 }
 
+/* Update prefereces when console="platform" is used on the command line. */
+static void platform_as_preferred_console(void)
+{
+	struct preferred_console *pc;
+	int i;
+
+	/* Prefer the last console either proposed or requested by a platform. */
+	for (i = 0, pc = preferred_consoles;
+	     i < MAX_PREFERRED_CONSOLES && (pc->name[0] || pc->devname[0]);
+	     i++, pc++) {
+		if (pc->pref_type == CON_PREF_PLATFORM_DEFAULT ||
+		    pc->pref_type == CON_PREF_PLATFORM_REQUEST) {
+			preferred_dev_console = i;
+		}
+	}
+
+	/* Enable even consoles which are "just" proposed by a platform. */
+	user_wants_platform_console = true;
+}
+
 static int __init console_msg_format_setup(char *str)
 {
 	if (!strcmp(str, "syslog"))
@@ -2655,6 +2676,15 @@ static int __init console_setup(char *str)
 	 */
 	if (str[0] == 0 || strcmp(str, "null") == 0) {
 		__add_preferred_console("ttynull", 0, NULL, NULL, NULL, CON_PREF_CMDLINE);
+		return 1;
+	}
+
+	/*
+	 * console="platform" allows to prefer consoles connected with
+	 * a specific HW as defined, for example, by SPCR or device tree.
+	 */
+	if (strcmp(str, "platform") == 0) {
+		platform_as_preferred_console();
 		return 1;
 	}
 
@@ -4173,7 +4203,8 @@ void register_console(struct console *newcon)
 		if (err == -ENOENT)
 			err = try_enable_preferred_console(newcon, CON_PREF_PLATFORM_REQUEST);
 
-		if (err == -ENOENT && !console_set_on_cmdline)
+		if (err == -ENOENT &&
+		    (user_wants_platform_console || !console_set_on_cmdline))
 			err = try_enable_preferred_console(newcon, CON_PREF_PLATFORM_DEFAULT);
 	}
 
