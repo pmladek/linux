@@ -2628,6 +2628,51 @@ static int __add_preferred_console(const char *name, const short idx,
 					brl_options, pref_type);
 }
 
+static struct preferred_console *find_preferred_console(const char *name)
+{
+	struct preferred_console *pc;
+	int i;
+
+	for (i = 0, pc = preferred_consoles;
+	     i < MAX_PREFERRED_CONSOLES && (pc->name[0] || pc->devname[0]);
+	     i++, pc++) {
+		if (strcmp(pc->name, name) == 0)
+			return pc;
+	}
+
+	return NULL;
+}
+
+/**
+ * replace_console - Rename a preferred console with matching pref_type.
+ * @old_name: device name of the to be replaced console
+ * @new_name: new device name
+ * @pref_type: Rename only when the pref_type matches
+ *
+ * Return: True when the rename was done. It means that a preferred console
+ *	   with the @new_name haven't existed yet, @old_name was found,
+ *	   and @pref_type matched.
+ */
+bool rename_preferred_console(const char *old_name, const char *new_name,
+			      enum con_pref_type pref_type)
+{
+	struct preferred_console *pc;
+
+	if (WARN_ON_ONCE(!old_name || !new_name))
+		return false;
+
+	pc = find_preferred_console(new_name);
+	if (pc)
+		return false;
+
+	pc = find_preferred_console(old_name);
+	if (!pc || pc->pref_type != pref_type)
+		return false;
+
+	strscpy(pc->name, new_name);
+	return true;
+}
+
 /* Update prefereces when console="platform" is used on the command line. */
 static void platform_as_preferred_console(void)
 {
