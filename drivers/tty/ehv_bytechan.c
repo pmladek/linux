@@ -326,11 +326,12 @@ static int __init ehv_bc_console_init(void)
 			CONFIG_PPC_EARLY_DEBUG_EHV_BC_HANDLE);
 #endif
 
-	/* add_preferred_console() must be called before register_console(),
+	/* prefer_console() must be called before register_console(),
 	   otherwise it won't work.  However, we don't want to enumerate all the
 	   byte channels here, either, since we only care about one. */
 
-	add_preferred_console(ehv_bc_console.name, ehv_bc_console.index, NULL);
+	prefer_console(ehv_bc_console.name, ehv_bc_console.index, NULL,
+		       CON_PREF_PLATFORM_REQUEST);
 	register_console(&ehv_bc_console);
 
 	pr_info("ehv-bc: registered console driver for byte channel %u\n",

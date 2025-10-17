@@ -74,10 +74,9 @@ int sunserial_console_match(struct console *con, struct device_node *dp,
 			return 0;
 	}
 
-	if (!console_set_on_cmdline) {
-		con->index = line;
-		add_preferred_console(con->name, line, NULL);
-	}
+	con->index = line;
+	prefer_console(con->name, line, NULL, CON_PREF_PLATFORM_DEFAULT);
+
 	return 1;
 }
 EXPORT_SYMBOL(sunserial_console_match);
