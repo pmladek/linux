@@ -719,6 +719,8 @@ enum con_pref_type {
 
 extern int prefer_console(const char *name, const short idx, char *options,
 			  enum con_pref_type pref_type);
+extern bool rename_preferred_console(const char *old_name, const char *new_name,
+				     enum con_pref_type pref_type);
 /* Temporary keep the old API until all callers are converted. */
 static inline
 int add_preferred_console(const char *name, const short idx, char *options)
