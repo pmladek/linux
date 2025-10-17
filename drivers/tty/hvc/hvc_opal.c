@@ -385,7 +385,7 @@ void __init hvc_opal_init_early(void)
 		goto out;
 	hvc_opal_boot_termno = index;
 	udbg_init_opal_common();
-	add_preferred_console("hvc", index, NULL);
+	prefer_console("hvc", index, NULL, CON_PREF_PLATFORM_REQUEST);
 	hvc_instantiate(index, index, ops);
 out:
 	of_node_put(stdout_node);

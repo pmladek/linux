@@ -117,7 +117,7 @@ int __init hp300_setup_serial_console(void)
 		port.mapbase = (FRODO_BASE + FRODO_APCI_OFFSET(1));
 		port.membase = (char *)(port.mapbase + DIO_VIRADDRBASE);
 		port.regshift = 2;
-		add_preferred_console("ttyS", port.line, "9600n8");
+		prefer_console("ttyS", port.line, "9600n8", CON_PREF_PLATFORM_REQUEST);
 #else
 		pr_warn("Serial console is APCI but support is disabled (CONFIG_HPAPCI)!\n");
 		return 0;
@@ -140,7 +140,7 @@ int __init hp300_setup_serial_console(void)
 		out_8(pa + DIO_VIRADDRBASE + DCA_IC, DCA_IC_IE);
 
 		if (DIO_ID(pa + DIO_VIRADDRBASE) & 0x80)
-			add_preferred_console("ttyS", port.line, "9600n8");
+			prefer_console("ttyS", port.line, "9600n8", CON_PREF_PLATFORM_REQUEST);
 #else
 		pr_warn("Serial console is DCA but support is disabled (CONFIG_HPDCA)!\n");
 		return 0;
