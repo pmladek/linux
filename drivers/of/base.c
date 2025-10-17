@@ -2029,14 +2029,15 @@ EXPORT_SYMBOL_GPL(of_alias_get_highest_id);
  */
 bool of_console_check(const struct device_node *dn, char *name, int index)
 {
-	if (!dn || dn != of_stdout || console_set_on_cmdline)
+	if (!dn || dn != of_stdout)
 		return false;
 
 	/*
 	 * XXX: cast `options' to char pointer to suppress complication
 	 * warnings: printk, UART and console drivers expect char pointer.
 	 */
-	return !add_preferred_console(name, index, (char *)of_stdout_options);
+	return !prefer_console(name, index, (char *)of_stdout_options,
+			       CON_PREF_PLATFORM_DEFAULT);
 }
 EXPORT_SYMBOL_GPL(of_console_check);
 
