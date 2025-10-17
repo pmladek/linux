@@ -425,8 +425,7 @@ void __init hvc_vio_init_early(void)
 		return;
 #endif
 	/* Check whether the user has requested a different console. */
-	if (!strstr(boot_command_line, "console="))
-		add_preferred_console("hvc", 0, NULL);
+	prefer_console("hvc", 0, NULL, CON_PREF_PLATFORM_DEFAULT);
 	hvc_instantiate(0, 0, ops);
 }
 

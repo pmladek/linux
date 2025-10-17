@@ -3480,9 +3480,9 @@ static int early_serial_console_setup(struct console *co, char *options)
 {
 	/*
 	 * This early console is always registered using the earlyprintk=
-	 * parameter, which does not call add_preferred_console(). Thus
-	 * @options is always NULL and the options for this early console
-	 * are passed using a custom buffer.
+	 * parameter, which does not call prefer_console(). Thus @options
+	 * is always NULL and the options for this early console are passed
+	 * using a custom buffer.
 	 */
 	WARN_ON(options);
 

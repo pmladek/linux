@@ -104,7 +104,7 @@ static int __init hvc_rtas_console_init(void)
 		return -EIO;
 
 	hvc_instantiate(hvc_rtas_cookie, 0, &hvc_rtas_get_put_ops);
-	add_preferred_console("hvc", 0, NULL);
+	prefer_console("hvc", 0, NULL, CON_PREF_PLATFORM_REQUEST);
 
 	return 0;
 }

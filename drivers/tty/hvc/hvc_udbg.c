@@ -76,7 +76,7 @@ static int __init hvc_udbg_console_init(void)
 		return -ENODEV;
 
 	hvc_instantiate(0, 0, &hvc_udbg_ops);
-	add_preferred_console("hvc", 0, NULL);
+	prefer_console("hvc", 0, NULL, CON_PREF_PLATFORM_REQUEST);
 
 	return 0;
 }
