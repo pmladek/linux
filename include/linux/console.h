@@ -721,12 +721,6 @@ extern int prefer_console(const char *name, const short idx, char *options,
 			  enum con_pref_type pref_type);
 extern bool rename_preferred_console(const char *old_name, const char *new_name,
 				     enum con_pref_type pref_type);
-/* Temporary keep the old API until all callers are converted. */
-static inline
-int add_preferred_console(const char *name, const short idx, char *options)
-{
-	return prefer_console(name, idx, options, CON_PREF_PLATFORM_REQUEST);
-}
 extern void console_force_preferred_locked(struct console *con);
 extern void register_console(struct console *);
 extern int unregister_console(struct console *);
