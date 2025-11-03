@@ -502,12 +502,6 @@ static int __init check_pmac_serial_console(void)
 
 	pr_debug(" -> check_pmac_serial_console()\n");
 
-	/* The user has requested a console so this is already set up. */
-	if (strstr(boot_command_line, "console=")) {
-		pr_debug(" console was specified !\n");
-		return -EBUSY;
-	}
-
 	if (!of_chosen) {
 		pr_debug(" of_chosen is NULL !\n");
 		return -ENODEV;
@@ -537,7 +531,7 @@ static int __init check_pmac_serial_console(void)
 
 	pr_debug("Found serial console at %s%d\n", devname, offset);
 
-	return add_preferred_console(devname, offset, NULL);
+	return prefer_console(devname, offset, NULL, CON_PREF_PLATFORM_DEFAULT);
 
  not_found:
 	pr_debug("No preferred console found !\n");

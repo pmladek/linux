@@ -615,12 +615,6 @@ static int __init check_legacy_serial_console(void)
 
 	DBG(" -> check_legacy_serial_console()\n");
 
-	/* The user has requested a console so this is already set up. */
-	if (strstr(boot_command_line, "console=")) {
-		DBG(" console was specified !\n");
-		return -EBUSY;
-	}
-
 	if (!of_chosen) {
 		DBG(" of_chosen is NULL !\n");
 		return -ENODEV;
@@ -676,9 +670,11 @@ static int __init check_legacy_serial_console(void)
 	if (speed) {
 		static char __initdata opt[16];
 		sprintf(opt, "%d", speed);
-		return add_preferred_console("ttyS", offset, opt);
+		return prefer_console("ttyS", offset, opt,
+				      CON_PREF_PLATFORM_DEFAULT);
 	} else
-		return add_preferred_console("ttyS", offset, NULL);
+		return prefer_console("ttyS", offset, NULL,
+				      CON_PREF_PLATFORM_DEFAULT);
 
  not_found:
 	DBG("No preferred console found !\n");
