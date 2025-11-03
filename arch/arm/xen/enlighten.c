@@ -274,8 +274,8 @@ void __init xen_early_init(void)
 	if (xen_feature(XENFEAT_dom0))
 		xen_start_flags |= SIF_INITDOMAIN|SIF_PRIVILEGED;
 
-	if (!console_set_on_cmdline && !xen_initial_domain())
-		add_preferred_console("hvc", 0, NULL);
+	if (!xen_initial_domain())
+		prefer_console(("hvc", 0, NULL, CON_PREF_PLATFORM_DEFAULT);
 }
 
 static void __init xen_acpi_guest_init(void)
