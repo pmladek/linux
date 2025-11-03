@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0
+-License-Identifier: GPL-2.0
 /*
  *  S390 version
  *    Copyright IBM Corp. 1999, 2012
@@ -214,13 +214,13 @@ __setup("condev=", condev_setup);
 static void __init set_preferred_console(void)
 {
 	if (CONSOLE_IS_3215 || CONSOLE_IS_SCLP)
-		add_preferred_console("ttyS", 0, NULL);
+		prefer_console("ttyS", 0, NULL, CON_PREF_PLATFORM_REQUEST);
 	else if (CONSOLE_IS_3270)
-		add_preferred_console("tty3270", 0, NULL);
+		prefer_console("tty3270", 0, NULL, CON_PREF_PLATFORM_REQUEST);
 	else if (CONSOLE_IS_VT220)
-		add_preferred_console("ttysclp", 0, NULL);
+		prefer_console("ttysclp", 0, NULL, CON_PREF_PLATFORM_REQUEST);
 	else if (CONSOLE_IS_HVC)
-		add_preferred_console("hvc", 0, NULL);
+		prefer_console("hvc", 0, NULL, CON_PREF_PLATFORM_REQUEST);
 }
 
 static int __init conmode_setup(char *str)
