@@ -67,11 +67,12 @@ void __init plat_mem_setup(void)
 		char *baud = ArcGetEnvironmentVariable("dbaud");
 		if (baud)
 			strscpy(options, baud);
-		add_preferred_console("ttyS", *(ctype + 1) == '2' ? 1 : 0,
-				      baud ? options : NULL);
+		prefer_console("ttyS", *(ctype + 1) == '2' ? 1 : 0,
+			       baud ? options : NULL,
+			       CON_PREF_PLATFORM_REQUEST);
 	} else if (!ctype || *ctype != 'g') {
 		/* Use ARC if we don't want serial ('d') or graphics ('g'). */
 		prom_flags |= PROM_FLAG_USE_AS_CONSOLE;
-		add_preferred_console("arc", 0, NULL);
+		prefer_console("arc", 0, NULL, CON_PREF_PLATFORM_REQUEST);
 	}
 }

@@ -73,7 +73,7 @@ void __init plat_mem_setup(void)
 
 	_machine_restart = jazz_machine_restart;
 
-	add_preferred_console("ttyS", 0, "9600");
+	prefer_console("ttyS", 0, "9600", CON_PREF_PLATFORM_REQUEST);
 }
 
 #ifdef CONFIG_OLIVETTI_M700
