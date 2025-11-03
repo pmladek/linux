@@ -83,11 +83,11 @@ static void __init sni_console_setup(void)
 		if (baud)
 			strscpy(options, baud);
 		if (strncmp(cdev, "tty552", 6) == 0)
-			add_preferred_console("ttyS", port,
-					      baud ? options : NULL);
+			prefer_console("ttyS", port, baud ? options : NULL,
+				       CON_PREF_PLATFORM_REQUEST);
 		else
-			add_preferred_console("ttySC", port,
-					      baud ? options : NULL);
+			prefer_console("ttySC", port, baud ? options : NULL,
+				       CON_PREF_PLATFORM_REQUEST);
 	}
 #endif
 }

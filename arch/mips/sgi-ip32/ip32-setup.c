@@ -92,8 +92,9 @@ void __init plat_mem_setup(void)
 			char *baud = ArcGetEnvironmentVariable("dbaud");
 			if (baud)
 				strscpy(options, baud);
-			add_preferred_console("ttyS", *(con + 1) == '2' ? 1 : 0,
-					      baud ? options : NULL);
+			prefer_console("ttyS", *(con + 1) == '2' ? 1 : 0,
+				       baud ? options : NULL,
+				       CON_PREF_PLATFORM_REQUEST);
 		}
 	}
 #endif
