@@ -260,8 +260,6 @@ static __init void chrp_init(void)
 	struct device_node *node;
 	const char *property;
 
-	if (strstr(boot_command_line, "console="))
-		return;
 	/* find the boot console from /chosen/stdout */
 	if (!of_chosen)
 		return;
@@ -289,7 +287,7 @@ static __init void chrp_init(void)
 	 * The optional graphics card has also type 'serial' in VGA mode.
 	 */
 	if (of_node_name_eq(node, "failsafe") || of_node_name_eq(node, "serial"))
-		add_preferred_console("ttyS", 0, NULL);
+		prefer_console("ttyS", 0, NULL, CON_PREF_PLATFORM_DEFAULT);
 out_put:
 	of_node_put(node);
 }

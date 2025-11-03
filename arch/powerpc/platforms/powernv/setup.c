@@ -242,7 +242,7 @@ static void __init pnv_init(void)
 		hvc_opal_init_early();
 	else
 #endif
-		add_preferred_console("hvc", 0, NULL);
+		prefer_console("hvc", 0, NULL, CON_PREF_PLATFORM_REQUEST);
 
 #ifdef CONFIG_PPC_64S_HASH_MMU
 	if (!radix_enabled()) {
