@@ -3988,9 +3988,6 @@ static int console_call_setup(struct console *newcon, char *options)
  * the newly registered console with any of the ones selected
  * by either the command line or add_preferred_console() and
  * setup/enable it.
- *
- * Care need to be taken with consoles that are statically
- * enabled such as netconsole
  */
 static int __try_enable_preferred_console(struct console *newcon,
 					  bool user_specified,
@@ -4042,14 +4039,6 @@ static int __try_enable_preferred_console(struct console *newcon,
 			newcon->flags |= CON_CONSDEV;
 		return 0;
 	}
-
-	/*
-	 * Some consoles, such as pstore and netconsole, can be enabled even
-	 * without matching. Accept the pre-enabled consoles only when match()
-	 * and setup() had a chance to be called.
-	 */
-	if (newcon->flags & CON_ENABLED && pc->user_specified == user_specified)
-		return 0;
 
 	return -ENOENT;
 }
@@ -4130,7 +4119,19 @@ static int try_enable_console(struct console *newcon)
 		return err;
 
 	/* If not, try to match against the platform default(s) */
-	return try_enable_preferred_console(newcon, false);
+	err = try_enable_preferred_console(newcon, false);
+	if (err != -ENOENT)
+		return err;
+
+	/*
+	 * Some consoles, such as pstore and netconsole, can be enabled even
+	 * without matching. Accept them at this stage when they had a chance
+	 * to match() and call setup().
+	 */
+	if (newcon->flags & CON_ENABLED)
+		err = 0;
+
+	return err;
 }
 
 /* Return the starting sequence number for a newly registered console. */
