@@ -12,6 +12,7 @@
 #include <linux/errno.h>
 #include <linux/ioport.h>	/* for struct resource */
 #include <linux/resource_ext.h>
+#include <linux/console.h>
 #include <linux/device.h>
 #include <linux/mod_devicetable.h>
 #include <linux/property.h>
@@ -1495,9 +1496,10 @@ static inline bool acpi_has_watchdog(void) { return false; }
 
 #ifdef CONFIG_ACPI_SPCR_TABLE
 extern bool qdf2400_e44_present;
-int acpi_parse_spcr(bool enable_earlycon, bool enable_console);
+int acpi_parse_spcr(bool enable_earlycon, enum con_pref_type pref_type);
 #else
-static inline int acpi_parse_spcr(bool enable_earlycon, bool enable_console)
+static inline
+int acpi_parse_spcr(bool enable_earlycon, enum con_pref_type pref_type)
 {
 	return -ENODEV;
 }

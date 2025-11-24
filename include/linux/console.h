@@ -693,8 +693,12 @@ enum con_flush_mode {
 /**
  * emum con_pref_type - types of preferred consoles
  * @CON_PREF_UNKNOWN:		Undefined
+ * @CON_PREF_PLATFORM_IGNORE:	Provided by the platform but should get ignored.
+ * @CON_PREF_PLATFORM_PROVIDE:	Provided by the platform. Enabled only when
+ *				console="platform" is used on the command line.
  * @CON_PREF_PLATFORM_DEFAULT:	Enabled by default. Ignored when another console
- *				is preferred via the command line.
+ *				is preferred via the command line except when
+ *				console="platform" is used as well.
  * @CON_PREF_PLATFORM_REQUEST:	Enabled together with the console(s) preferred
  *				via the command line.
  * @CON_PREF_CMDLINE:		Defined on the command line
@@ -706,6 +710,8 @@ enum con_flush_mode {
  */
 enum con_pref_type {
 	CON_PREF_UNKNOWN = 0,
+	CON_PREF_PLATFORM_IGNORE,
+	CON_PREF_PLATFORM_PROVIDE,
 	CON_PREF_PLATFORM_DEFAULT,
 	CON_PREF_PLATFORM_REQUEST,
 	CON_PREF_CMDLINE,

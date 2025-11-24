@@ -2503,6 +2503,12 @@ static int update_preferred_console(int i, const char *name, const short idx,
 {
 	struct preferred_console *pc;
 
+	if (pref_type == CON_PREF_UNKNOWN)
+		return -EINVAL;
+
+	if (pref_type == CON_PREF_PLATFORM_IGNORE)
+		return 0;
+
 	if (i >= MAX_PREFERRED_CONSOLES)
 		return -E2BIG;
 
@@ -2632,7 +2638,8 @@ static void platform_as_preferred_console(void)
 	for (i = 0, pc = preferred_consoles;
 	     i < MAX_PREFERRED_CONSOLES && (pc->name[0] || pc->devname[0]);
 	     i++, pc++) {
-		if (pc->pref_type == CON_PREF_PLATFORM_DEFAULT ||
+		if (pc->pref_type == CON_PREF_PLATFORM_PROVIDE ||
+		    pc->pref_type == CON_PREF_PLATFORM_DEFAULT ||
 		    pc->pref_type == CON_PREF_PLATFORM_REQUEST) {
 			preferred_dev_console = i;
 		}
@@ -4206,6 +4213,9 @@ void register_console(struct console *newcon)
 		if (err == -ENOENT &&
 		    (user_wants_platform_console || !console_set_on_cmdline))
 			err = try_enable_preferred_console(newcon, CON_PREF_PLATFORM_DEFAULT);
+
+		if (err == -ENOENT && user_wants_platform_console)
+			err = try_enable_preferred_console(newcon, CON_PREF_PLATFORM_PROVIDE);
 	}
 
 	/*
