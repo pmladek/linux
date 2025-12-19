@@ -11,6 +11,12 @@ braille_update_options(struct preferred_console *pc, char *brl_options)
 		pc->brl_options = brl_options;
 }
 
+static inline bool
+is_braille_console_preferred(struct preferred_console *pc)
+{
+	return (!!pc->brl_options);
+}
+
 /*
  * Setup console according to braille options.
  * Return -EINVAL on syntax error, 0 on success (or no braille option was
@@ -32,6 +38,12 @@ _braille_unregister_console(struct console *console);
 static inline void
 braille_update_options(struct preferred_console *pc, char *brl_options)
 {
+}
+
+static inline bool
+is_braille_console_preferred(struct preferred_console *pc)
+{
+	return false;
 }
 
 static inline int
