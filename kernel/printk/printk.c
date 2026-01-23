@@ -365,6 +365,7 @@ static int console_locked;
 static struct preferred_console preferred_consoles[MAX_PREFERRED_CONSOLES];
 
 static int preferred_dev_console = -1;
+static int preferred_dev_console_prev = -1;
 static bool want_braille_console;
 int console_set_on_cmdline;
 EXPORT_SYMBOL(console_set_on_cmdline);
@@ -2555,10 +2556,23 @@ static int update_preferred_console(int i, const char *name, const short idx,
 
 	braille_update_options(pc, brl_options);
 
-	if (brl_options)
+	if (brl_options) {
 		want_braille_console = true;
-	else
+		/*
+		 * This console name will always get enabled as Braille
+		 * console. It takes special code paths in register_console().
+		 * Do not treat it as a normal preferred_console.
+		 */
+		if (preferred_dev_console == i)
+			preferred_dev_console = preferred_dev_console_prev;
+	} else {
+		/*
+		 * Only the VisioBraille device is supported at the moment.
+		 * One level history should be enough.
+		 */
+		preferred_dev_console_prev = preferred_dev_console;
 		preferred_dev_console = i;
+	}
 
 	/*
 	 * @c console was defined by the user on the command line.
