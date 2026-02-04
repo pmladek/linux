@@ -365,6 +365,7 @@ static int console_locked;
 static struct preferred_console preferred_consoles[MAX_PREFERRED_CONSOLES];
 
 static int preferred_dev_console = -1;
+static bool want_braille_console;
 int console_set_on_cmdline;
 EXPORT_SYMBOL(console_set_on_cmdline);
 
@@ -2554,7 +2555,9 @@ static int update_preferred_console(int i, const char *name, const short idx,
 
 	braille_update_options(pc, brl_options);
 
-	if (!brl_options)
+	if (brl_options)
+		want_braille_console = true;
+	else
 		preferred_dev_console = i;
 
 	/*
@@ -3900,8 +3903,9 @@ static int console_call_setup(struct console *newcon, char *options)
  * Care need to be taken with consoles that are statically
  * enabled such as netconsole
  */
-static int try_enable_preferred_console(struct console *newcon,
-					bool user_specified)
+static int __try_enable_preferred_console(struct console *newcon,
+					  bool user_specified,
+					  bool try_only_braille)
 {
 	struct preferred_console *pc;
 	int i, err;
@@ -3918,6 +3922,12 @@ static int try_enable_preferred_console(struct console *newcon,
 		    newcon->match(newcon, pc->name, pc->index, pc->options) != 0) {
 			/* default matching */
 			BUILD_BUG_ON(sizeof(pc->name) != sizeof(newcon->name));
+			/*
+			 * Two entries might have the same pc->name when one was
+			 * defined via "devname".
+			 */
+			if (try_only_braille && !is_braille_console_preferred(pc))
+				continue;
 			if (strcmp(pc->name, newcon->name) != 0)
 				continue;
 			if (newcon->index >= 0 &&
@@ -3926,7 +3936,7 @@ static int try_enable_preferred_console(struct console *newcon,
 			if (newcon->index < 0)
 				newcon->index = pc->index;
 
-			if (is_braille_console_preferred(pc))
+			if (try_only_braille)
 				return _braille_register_console(newcon, pc);
 
 			err = console_call_setup(newcon, pc->options);
@@ -3948,6 +3958,17 @@ static int try_enable_preferred_console(struct console *newcon,
 		return 0;
 
 	return -ENOENT;
+}
+
+static int try_enable_preferred_console(struct console *newcon,
+					bool user_specified)
+{
+	return __try_enable_preferred_console(newcon, user_specified, false);
+}
+
+static int try_enable_braille_console(struct console *newcon)
+{
+	return __try_enable_preferred_console(newcon, true, true);
 }
 
 /* Try to enable the console unconditionally */
@@ -4104,6 +4125,20 @@ void register_console(struct console *newcon)
 	}
 
 	/*
+	 * First, try to enable the console driver as a Braille console.
+	 * It would have metadata in the preferred_consoles[] array.
+	 * But it won't be counted as @preferred_console because
+	 * it does not get printk() messages and is not associated
+	 * with /dev/console.
+	 */
+	if (want_braille_console) {
+		err = try_enable_braille_console(newcon);
+		/* Return on success or when con->setup failed. */
+		if (err != -ENOENT)
+			goto unlock_free;
+	}
+
+	/*
 	 * See if we want to enable this console driver by default.
 	 *
 	 * Nope when a console is preferred by the command line, device
@@ -4129,12 +4164,8 @@ void register_console(struct console *newcon)
 	if (err == -ENOENT)
 		err = try_enable_preferred_console(newcon, false);
 
-	/* printk() messages are not printed to the Braille console. */
-	if (err || newcon->flags & CON_BRL) {
-		if (newcon->flags & CON_NBCON)
-			nbcon_free(newcon);
-		goto unlock;
-	}
+	if (err)
+		goto unlock_free;
 
 	/*
 	 * If we have a bootconsole, and are switching to a real console,
@@ -4227,6 +4258,11 @@ void register_console(struct console *newcon)
 	printk_kthreads_check_locked();
 unlock:
 	console_list_unlock();
+	return;
+
+unlock_free:
+	nbcon_free(newcon);
+	goto unlock;
 }
 EXPORT_SYMBOL(register_console);
 
