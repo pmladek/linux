@@ -5,9 +5,10 @@
 #ifdef CONFIG_A11Y_BRAILLE_CONSOLE
 
 static inline void
-braille_set_options(struct preferred_console *pc, char *brl_options)
+braille_update_options(struct preferred_console *pc, char *brl_options)
 {
-	pc->brl_options = brl_options;
+	if (brl_options)
+		pc->brl_options = brl_options;
 }
 
 /*
@@ -29,7 +30,7 @@ _braille_unregister_console(struct console *console);
 #else
 
 static inline void
-braille_set_options(struct preferred_console *pc, char *brl_options)
+braille_update_options(struct preferred_console *pc, char *brl_options)
 {
 }
 
