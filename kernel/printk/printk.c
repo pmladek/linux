@@ -2544,18 +2544,119 @@ asmlinkage __visible void early_printk(const char *fmt, ...)
 }
 #endif
 
-static void set_user_specified(struct preferred_console *pc, bool user_specified)
+/** update_preferred_console - Update a given entry in the preferred_consoles[]
+ *	table.
+ * @i: index of the entry in @preferred_consoles table which should get updated.
+ * @name: The name of the preferred console driver.
+ * @idx: Preferred console index, e.g. port number.
+ * @devname: The name of the preferred physical device.
+ * @options: Options used when setting up the console driver.
+ * @brl_options: Options used when setting up the console driver
+ *	as a braille console.
+ * @user_specified: True if preferred via the kernel command line.
+ *
+ * The function ensures that the given values are consistent. Also
+ * it updates some global variables which are used to make the right
+ * decisions in register_console().
+ *
+ * Rules:
+ *
+ *   1. Either @name and valid @idx OR @devname and @idx=-1 are allowed.
+ *	Note that a valid @name and @idx will get assigned later when
+ *	@devname matches during the device initialization.
+ *   2. Specify @brl_options if the console should be enabled as
+ *	a Braille console [*]
+ *   3. Only matching entries can be updated.
+ *   4. @options passed via the command line are used when the same
+ *	console is preferred also by some platform-specific code.
+ *
+ * [*] Braille console is using the mechanism for registering consoles
+ *     but it is very special. It is primarily used for user interaction
+ *     with the system. It neither gets printk() messages nor is associated
+ *     with /dev/console.
+ */
+static int update_preferred_console(unsigned int i,
+				    const char *name, const short idx,
+				    const char *devname, char *options,
+				    char *brl_options, bool user_specified)
 {
-	if (!user_specified)
-		return;
+	struct preferred_console *pc;
+
+	if (i >= MAX_PREFERRED_CONSOLES)
+		return -E2BIG;
+
+	pc = &preferred_consoles[i];
+
+	if (!name && !devname)
+		return -EINVAL;
+
+	if (devname) {
+		/*
+		 * A valid console name and index will get assigned when
+		 * a matching device gets registered.
+		 */
+		if (name) {
+			pr_err("Adding a preferred console devname with a hard-coded console name: %s, %s\n",
+			       devname, name);
+			return -EINVAL;
+		}
+		if (pc->name[0]) {
+			pr_err("Updating a preferred console entry with an already assigned console name via devname: %s, %s\n",
+			       devname, pc->name);
+			return -EINVAL;
+		}
+		if (idx != -1) {
+			pr_err("Adding a preferred console devname with a hard-coded index: %s, %d\n",
+			       devname, idx);
+			return -EINVAL;
+		}
+
+		if (!pc->devname[0]) {
+			strscpy(pc->devname, devname);
+			pc->index = idx;
+		} else if (strcmp(pc->devname, devname) != 0) {
+			pr_err("Updating a preferred console with an invalid devname: %s vs. %s\n",
+			       pc->devname, devname);
+			return -EINVAL;
+		}
+	}
+
+	if (name) {
+		/* A console name must be defined with a valid index. */
+		if (idx < 0) {
+			pr_err("Adding a preferred console with an invalid index: %s, %d\n",
+			       name, idx);
+			return -EINVAL;
+		}
+
+		if (!pc->name[0]) {
+			strscpy(pc->name, name);
+			pc->index = idx;
+		} else if (strcmp(pc->name, name) != 0 || pc->index != idx) {
+			pr_err("Updating a preferred console with an invalid name or index: %s%d vs. %s%d\n",
+			       pc->name, pc->index, name, idx);
+			return -EINVAL;
+		}
+	}
+
+	if (!pc->options || (user_specified && options))
+		pc->options = options;
+
+	braille_update_options(pc, brl_options);
+
+	if (!brl_options)
+		preferred_dev_console = i;
 
 	/*
 	 * @pc console was defined by the user on the command line.
 	 * Do not clear when added twice also by SPCR or the device tree.
 	 */
-	pc->user_specified = true;
-	/* At least one console defined by the user on the command line. */
-	console_set_on_cmdline = 1;
+	if (user_specified) {
+		pc->user_specified = true;
+		console_set_on_cmdline = 1;
+	}
+
+	return 0;
 }
 
 static int __add_preferred_console(const char *name, const short idx,
@@ -2563,19 +2664,11 @@ static int __add_preferred_console(const char *name, const short idx,
 				   char *brl_options, bool user_specified)
 {
 	struct preferred_console *pc;
-	int i;
+	unsigned int i;
 
 	if (!name && !devname)
 		return -EINVAL;
 
-	/*
-	 * We use a signed short index for struct console for device drivers to
-	 * indicate a not yet assigned index or port. However, a negative index
-	 * value is not valid when the console name and index are defined on
-	 * the command line.
-	 */
-	if (name && idx < 0)
-		return -EINVAL;
 
 	/*
 	 *	See if this tty is not yet registered, and
@@ -2584,28 +2677,14 @@ static int __add_preferred_console(const char *name, const short idx,
 	for (i = 0, pc = preferred_consoles;
 	     i < MAX_PREFERRED_CONSOLES && (pc->name[0] || pc->devname[0]);
 	     i++, pc++) {
-		if ((name && strcmp(pc->name, name) == 0 && pc->index == idx) ||
-		    (devname && strcmp(pc->devname, devname) == 0)) {
-			if (!brl_options)
-				preferred_dev_console = i;
-			set_user_specified(pc, user_specified);
-			return 0;
-		}
+		if (name && strcmp(pc->name, name) == 0 && pc->index == idx)
+			break;
+		if (devname && strcmp(pc->devname, devname) == 0)
+			break;
 	}
-	if (i == MAX_PREFERRED_CONSOLES)
-		return -E2BIG;
-	if (!brl_options)
-		preferred_dev_console = i;
-	if (name)
-		strscpy(pc->name, name);
-	if (devname)
-		strscpy(pc->devname, devname);
-	pc->options = options;
-	set_user_specified(pc, user_specified);
-	braille_set_options(pc, brl_options);
 
-	pc->index = idx;
-	return 0;
+	return update_preferred_console(i, name, idx, devname, options,
+					brl_options, user_specified);
 }
 
 static int __init console_msg_format_setup(char *str)
