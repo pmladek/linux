@@ -72,7 +72,7 @@ static bool xgene_8250_erratum_present(struct acpi_table_spcr *tb)
 /**
  * acpi_parse_spcr() - parse ACPI SPCR table and add preferred console
  * @enable_earlycon: set up earlycon for the console specified by the table
- * @enable_console: setup the console specified by the table.
+ * @pref_type: how and when enable the console specified by the table.
  *
  * For the architectures with support for ACPI, CONFIG_ACPI_SPCR_TABLE may be
  * defined to parse ACPI SPCR table.  As a result of the parsing preferred
@@ -82,7 +82,7 @@ static bool xgene_8250_erratum_present(struct acpi_table_spcr *tb)
  * When CONFIG_ACPI_SPCR_TABLE is defined, this function should be called
  * from arch initialization code as soon as the DT/ACPI decision is made.
  */
-int __init acpi_parse_spcr(bool enable_earlycon, bool enable_console)
+int __init acpi_parse_spcr(bool enable_earlycon, enum con_pref_type pref_type)
 {
 	static char opts[64];
 	struct acpi_table_spcr *table;
@@ -230,10 +230,7 @@ int __init acpi_parse_spcr(bool enable_earlycon, bool enable_console)
 	if (enable_earlycon)
 		setup_earlycon(opts);
 
-	if (enable_console)
-		err = add_preferred_console(uart, 0, opts + strlen(uart) + 1);
-	else
-		err = 0;
+	err = prefer_console(uart, 0, opts + strlen(uart) + 1, pref_type);
 done:
 	acpi_put_table((struct acpi_table_header *)table);
 	return err;
