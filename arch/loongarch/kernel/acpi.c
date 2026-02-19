@@ -231,7 +231,7 @@ void __init acpi_boot_table_init(void)
 	acpi_process_madt();
 
 	/* Do not enable ACPI SPCR console by default */
-	acpi_parse_spcr(earlycon_acpi_spcr_enable, false);
+	acpi_parse_spcr(earlycon_acpi_spcr_enable, CON_PREF_PLATFORM_PROVIDE);
 
 	if (IS_ENABLED(CONFIG_ACPI_BGRT))
 		acpi_table_parse(ACPI_SIG_BGRT, acpi_parse_bgrt);

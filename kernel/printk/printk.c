@@ -2588,6 +2588,12 @@ static int update_preferred_console(unsigned int i,
 {
 	struct preferred_console *pc;
 
+	if (pref_type == CON_PREF_UNKNOWN)
+		return -EINVAL;
+
+	if (pref_type == CON_PREF_PLATFORM_IGNORE)
+		return 0;
+
 	if (i >= MAX_PREFERRED_CONSOLES)
 		return -E2BIG;
 
@@ -2725,7 +2731,8 @@ static void platform_as_preferred_console(void)
 	for (i = 0, pc = preferred_consoles;
 	     i < MAX_PREFERRED_CONSOLES && (pc->name[0] || pc->devname[0]);
 	     i++, pc++) {
-		if (pc->pref_type == CON_PREF_PLATFORM_DEFAULT ||
+		if (pc->pref_type == CON_PREF_PLATFORM_PROVIDE ||
+		    pc->pref_type == CON_PREF_PLATFORM_DEFAULT ||
 		    pc->pref_type == CON_PREF_PLATFORM_REQUEST) {
 			preferred_dev_console = i;
 		}
@@ -4171,6 +4178,12 @@ static int try_enable_console(struct console *newcon)
 			return err;
 	}
 
+	if (user_wants_platform_console) {
+		err = try_enable_preferred_console(newcon, CON_PREF_PLATFORM_PROVIDE);
+		if (err != -ENOENT)
+			return err;
+	}
+
 	/*
 	 * Some consoles, such as pstore and netconsole, can be enabled even
 	 * without matching. Accept them at this stage when they had a chance
@@ -4329,6 +4342,7 @@ void register_console(struct console *newcon)
 			pr_info("%s:       Registered as Braille console\n", __func__);
 		goto unlock;
 	}
+
 
 	/*
 	 * If we have a bootconsole, and are switching to a real console,

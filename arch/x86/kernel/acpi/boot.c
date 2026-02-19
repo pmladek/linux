@@ -1670,7 +1670,10 @@ int __init acpi_boot_init(void)
 	if (!acpi_noirq)
 		x86_init.pci.init = pci_acpi_init;
 
-	acpi_parse_spcr(earlycon_acpi_spcr_enable, acpi_spcr_add);
+	if (acpi_spcr_add)
+		acpi_parse_spcr(earlycon_acpi_spcr_enable, CON_PREF_PLATFORM_REQUEST);
+	else
+		acpi_parse_spcr(earlycon_acpi_spcr_enable, CON_PREF_PLATFORM_PROVIDE);
 
 	return 0;
 }

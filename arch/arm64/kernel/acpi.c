@@ -232,6 +232,7 @@ done:
 		if (earlycon_acpi_spcr_enable)
 			early_init_dt_scan_chosen_stdout();
 	} else {
+		enum con_pref_type pref_type;
 #ifdef CONFIG_HIBERNATION
 		struct acpi_table_header *facs = NULL;
 		acpi_get_table(ACPI_SIG_FACS, 1, &facs);
@@ -250,8 +251,12 @@ done:
 		 * behaviour, use acpi=nospcr to disable console in ACPI SPCR
 		 * table as default serial console.
 		 */
-		acpi_parse_spcr(earlycon_acpi_spcr_enable,
-			!param_acpi_nospcr);
+		if (param_acpi_nospcr)
+			pref_type = CON_PREF_PLATFORM_IGNORE;
+		else
+			pref_type = CON_PREF_PLATFORM_REQUEST;
+
+		acpi_parse_spcr(earlycon_acpi_spcr_enable, pref_type);
 
 		if (IS_ENABLED(CONFIG_ACPI_BGRT))
 			acpi_table_parse(ACPI_SIG_BGRT, acpi_parse_bgrt);
