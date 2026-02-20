@@ -1,0 +1,33 @@
++ test the various scenarios where the same HW device might be preferred
+  by three preferred_consoles[] entries:
+
+      + preferred via the classic con->name (ttyS0)
+      + preferred via devname
+      + preferred also as early console "uart..." which should
+	later match via con->match with the regular "ttyS0" entry.
+
+   1. Check for which entries register_console() is called
+      and when it succeeds.
+
+   2. Check how it is affected when the "ttyS0" entry is marked
+      as "brl," console.
+
+      Especially check whether it:
+
+	   + gets enabled only as Braille console
+	   + gets enabled only as normal console
+	   + gets enabled as both Braille and normal console
+		(Braille mess + printk messages)
+
+
++ Prevent regressions found by the above testing
+
++ Update changelog of the modified patch, see
+  https://lore.kernel.org/r/aZhI2H50IJdg7HHF@pathway.suse.cz
+
++ Process the rest of the feedback.
+
++ Double check and document changes against v1.
+
++ Send v2.
+
