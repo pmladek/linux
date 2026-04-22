@@ -2687,6 +2687,8 @@ static int __add_preferred_console(const char *name, const short idx,
 	struct preferred_console *pc;
 	unsigned int i;
 
+	pr_info("%s: %s%d or devname:%s\n", __func__, name, idx, devname);
+
 	if (!name && !devname)
 		return -EINVAL;
 
@@ -4258,6 +4260,8 @@ void register_console(struct console *newcon)
 	u64 init_seq;
 	int err;
 
+	pr_info("%s: %s%d\n", __func__, newcon->name, newcon->index); 
+
 	console_list_lock();
 
 	for_each_console(con) {
@@ -4294,6 +4298,8 @@ void register_console(struct console *newcon)
 	if (err || newcon->flags & CON_BRL) {
 		if (newcon->flags & CON_NBCON)
 			nbcon_free(newcon);
+		if (newcon->flags & CON_BRL)
+			pr_info("%s:       Registered as Braille console\n", __func__);
 		goto unlock;
 	}
 
@@ -4386,6 +4392,9 @@ void register_console(struct console *newcon)
 
 	/* Changed console list, may require printer threads to start/stop. */
 	printk_kthreads_check_locked();
+
+	pr_info("%s:       Registered as normal console\n", __func__);
+
 unlock:
 	console_list_unlock();
 }
