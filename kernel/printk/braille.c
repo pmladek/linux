@@ -37,8 +37,12 @@ int _braille_console_setup(char **str, char **brl_options)
 int
 _braille_register_console(struct console *console, struct preferred_console *pc)
 {
-	return braille_register_console(console, pc->index, pc->options,
+	int err;
+
+	err = braille_register_console(console, pc->index, pc->options,
 					pc->brl_options);
+	pr_info("%s: Return %pe\n", __func__, (void *)(long int)err);
+	return err;
 }
 
 int
