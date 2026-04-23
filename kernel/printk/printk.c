@@ -367,6 +367,7 @@ static int console_locked;
 static struct preferred_console preferred_consoles[MAX_PREFERRED_CONSOLES];
 
 static int preferred_dev_console = -1;
+static int preferred_dev_console_prev = -1;
 static bool want_braille_console;
 int console_set_on_cmdline;
 EXPORT_SYMBOL(console_set_on_cmdline);
@@ -2566,10 +2567,11 @@ asmlinkage __visible void early_printk(const char *fmt, ...)
  *	Note that a valid @name and @idx will get assigned later when
  *	@devname matches during the device initialization.
  *   2. Specify @brl_options if the console should be enabled as
- *	a Braille console [*]
+ *	a Braille console.
  *   3. Only matching entries can be updated.
  *   4. @options passed via the command line are used when the same
  *	console is preferred also by some platform-specific code.
+ *   5. Braille console is never associated with /dev/console.[*]
  *
  * [*] Braille console is using the mechanism for registering consoles
  *     but it is very special. It is primarily used for user interaction
@@ -2645,10 +2647,22 @@ static int update_preferred_console(unsigned int i,
 
 	braille_update_options(pc, brl_options);
 
-	if (brl_options)
+	/*
+	 * The last preferred console should get associated with /dev/console.
+	 * Except for the Braille console which can't get associated with
+	 * /dev/console. One level history should be enough because only one,
+	 * the VisioBraille device, is supported at the moment.
+	 */
+	if (brl_options) {
 		want_braille_console = true;
-	else
+		if (preferred_dev_console == i) {
+			preferred_dev_console = preferred_dev_console_prev;
+			preferred_dev_console_prev = -1;
+		}
+	} else if (!is_braille_console_preferred(pc)) {
+		preferred_dev_console_prev = preferred_dev_console;
 		preferred_dev_console = i;
+	}
 
 	/*
 	 * @pc console was defined by the user on the command line.
