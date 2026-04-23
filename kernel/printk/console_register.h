@@ -2,12 +2,14 @@
 #ifndef _CONSOLE_REGISTER_H
 #define _CONSOLE_REGISTER_H
 
+#include <linux/console.h>
+
 struct preferred_console
 {
 	char	name[16];			/* Name of the driver	    */
 	int	index;				/* Minor dev. to use	    */
 	char	devname[32];			/* DEVNAME:0.0 style device name */
-	bool	user_specified;			/* Specified by command line vs. platform */
+	enum con_pref_type pref_type;		/* When enable the console. */
 	char	*options;			/* Options for the driver   */
 #ifdef CONFIG_A11Y_BRAILLE_CONSOLE
 	char	*brl_options;			/* Options for braille driver */

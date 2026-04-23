@@ -690,7 +690,35 @@ enum con_flush_mode {
 	CONSOLE_REPLAY_ALL,
 };
 
-extern int add_preferred_console(const char *name, const short idx, char *options);
+/**
+ * emum con_pref_type - types of preferred consoles
+ * @CON_PREF_UNKNOWN:		Undefined
+ * @CON_PREF_PLATFORM_DEFAULT:	Enabled by default. Ignored when another console
+ *				is preferred via the command line.
+ * @CON_PREF_PLATFORM_REQUEST:	Enabled together with the console(s) preferred
+ *				via the command line.
+ * @CON_PREF_CMDLINE:		Defined on the command line
+ *
+ * HW/SW platforms allow to define a preferred console, either via SPCR,
+ * device tree, or when some particular hardware or software mode is
+ * detected. The various types define the historical handling of the information
+ * on different platforms.
+ */
+enum con_pref_type {
+	CON_PREF_UNKNOWN = 0,
+	CON_PREF_PLATFORM_DEFAULT,
+	CON_PREF_PLATFORM_REQUEST,
+	CON_PREF_CMDLINE,
+};
+
+extern int prefer_console(const char *name, const short idx, char *options,
+			  enum con_pref_type pref_type);
+/* Temporary keep the old API until all callers are converted. */
+static inline
+int add_preferred_console(const char *name, const short idx, char *options)
+{
+	return prefer_console(name, idx, options, CON_PREF_PLATFORM_REQUEST);
+}
 extern void console_force_preferred_locked(struct console *con);
 extern void register_console(struct console *);
 extern int unregister_console(struct console *);
