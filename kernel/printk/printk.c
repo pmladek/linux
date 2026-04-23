@@ -366,6 +366,8 @@ static int console_locked;
 
 static struct preferred_console preferred_consoles[MAX_PREFERRED_CONSOLES];
 
+static enum con_pref_type preferred_dev_console_type = CON_PREF_UNKNOWN;
+static enum con_pref_type preferred_dev_console_type_prev = CON_PREF_UNKNOWN;
 static int preferred_dev_console = -1;
 static int preferred_dev_console_prev = -1;
 static bool want_braille_console;
@@ -2555,7 +2557,7 @@ asmlinkage __visible void early_printk(const char *fmt, ...)
  * @options: Options used when setting up the console driver.
  * @brl_options: Options used when setting up the console driver
  *	as a braille console.
- * @user_specified: True if preferred via the kernel command line.
+ * @pref_type: Preference type, e.g. cmdline vs. platform request.
  *
  * The function ensures that the given values are consistent. Also
  * it updates some global variables which are used to make the right
@@ -2569,8 +2571,8 @@ asmlinkage __visible void early_printk(const char *fmt, ...)
  *   2. Specify @brl_options if the console should be enabled as
  *	a Braille console.
  *   3. Only matching entries can be updated.
- *   4. @options passed via the command line are used when the same
- *	console is preferred also by some platform-specific code.
+ *   4. @options and @brl_options are updated only when the new values
+ *	have a higher @pref_type; command line wins.
  *   5. Braille console is never associated with /dev/console.[*]
  *
  * [*] Braille console is using the mechanism for registering consoles
@@ -2581,7 +2583,7 @@ asmlinkage __visible void early_printk(const char *fmt, ...)
 static int update_preferred_console(unsigned int i,
 				    const char *name, const short idx,
 				    const char *devname, char *options,
-				    char *brl_options, bool user_specified)
+				    char *brl_options, enum con_pref_type pref_type)
 {
 	struct preferred_console *pc;
 
@@ -2642,10 +2644,13 @@ static int update_preferred_console(unsigned int i,
 		}
 	}
 
-	if (!pc->options || (user_specified && options))
+	if (!pc->options || ((pref_type > pc->pref_type) && options))
 		pc->options = options;
 
 	braille_update_options(pc, brl_options);
+
+	if (pref_type > pc->pref_type)
+		pc->pref_type = pref_type;
 
 	/*
 	 * The last preferred console should get associated with /dev/console.
@@ -2657,28 +2662,31 @@ static int update_preferred_console(unsigned int i,
 		want_braille_console = true;
 		if (preferred_dev_console == i) {
 			preferred_dev_console = preferred_dev_console_prev;
+			preferred_dev_console_type = preferred_dev_console_type_prev;
+
 			preferred_dev_console_prev = -1;
+			preferred_dev_console_type_prev = CON_PREF_UNKNOWN;
 		}
-	} else if (!is_braille_console_preferred(pc)) {
+	} else if ((pref_type >= preferred_dev_console_type) &&
+		   !is_braille_console_preferred(pc)) {
 		preferred_dev_console_prev = preferred_dev_console;
+		preferred_dev_console_type_prev = preferred_dev_console_type;
+
 		preferred_dev_console = i;
+		preferred_dev_console_type = pref_type;
 	}
 
-	/*
-	 * @pc console was defined by the user on the command line.
-	 * Do not clear when added twice also by SPCR or the device tree.
-	 */
-	if (user_specified) {
-		pc->user_specified = true;
+	/* At least one console defined by the user on the command line. */
+	if (pref_type == CON_PREF_CMDLINE)
 		console_set_on_cmdline = 1;
-	}
 
 	return 0;
 }
 
 static int __add_preferred_console(const char *name, const short idx,
 				   const char *devname, char *options,
-				   char *brl_options, bool user_specified)
+				   char *brl_options,
+				   enum con_pref_type pref_type)
 {
 	struct preferred_console *pc;
 	unsigned int i;
@@ -2703,7 +2711,7 @@ static int __add_preferred_console(const char *name, const short idx,
 	}
 
 	return update_preferred_console(i, name, idx, devname, options,
-					brl_options, user_specified);
+					brl_options, pref_type);
 }
 
 static int __init console_msg_format_setup(char *str)
@@ -2739,7 +2747,7 @@ static int __init console_setup(char *str)
 	 * for exactly this purpose.
 	 */
 	if (str[0] == 0 || strcmp(str, "null") == 0) {
-		__add_preferred_console("ttynull", 0, NULL, NULL, NULL, true);
+		__add_preferred_console("ttynull", 0, NULL, NULL, NULL, CON_PREF_CMDLINE);
 		return 1;
 	}
 
@@ -2783,27 +2791,25 @@ static int __init console_setup(char *str)
 
 	*s = 0;
 
-	__add_preferred_console(ttyname, idx, devname, options, brl_options, true);
+	__add_preferred_console(ttyname, idx, devname, options, brl_options, CON_PREF_CMDLINE);
 	return 1;
 }
 __setup("console=", console_setup);
 
 /**
- * add_preferred_console - add a device to the list of preferred consoles.
+ * prefer_console - Add a preferred console with a given preference type.
  * @name: device name
  * @idx: device index
  * @options: options for this console
+ * @pref_type: console preference type
  *
- * The last preferred console added will be used for kernel messages
- * and stdin/out/err for init.  Normally this is used by console_setup
- * above to handle user-supplied console arguments; however it can also
- * be used by arch-specific code either to override the user or more
- * commonly to provide a default console (ie from PROM variables) when
- * the user has not supplied one.
+ * Add the console into the array of preferred consoles. The preference
+ * type defines how and when it will be used.
  */
-int add_preferred_console(const char *name, const short idx, char *options)
+int prefer_console(const char *name, const short idx, char *options,
+		   enum con_pref_type pref_type)
 {
-	return __add_preferred_console(name, idx, NULL, options, NULL, false);
+	return __add_preferred_console(name, idx, NULL, options, NULL, pref_type);
 }
 
 /**
@@ -3986,13 +3992,12 @@ static int console_call_setup(struct console *newcon, char *options)
 }
 
 /*
- * This is called by register_console() to try to match
- * the newly registered console with any of the ones selected
- * by either the command line or add_preferred_console() and
- * setup/enable it.
+ * This is called by register_console() to try to match the newly registered
+ * console with any of the ones selected by either the command line or
+ * prefer_console() and setup/enable it.
  */
 static int __try_enable_preferred_console(struct console *newcon,
-					  bool user_specified,
+					  enum con_pref_type pref_type,
 					  bool try_only_braille)
 {
 	struct preferred_console *pc;
@@ -4006,14 +4011,14 @@ static int __try_enable_preferred_console(struct console *newcon,
 			continue;
 
 		/*
-		 * @try_only_braille and @user_specifified define which
-		 * preferred console entries are handled in this round.
+		 * %try_only_braille and %pref_type define which preferred
+		 * console entries are handled in this round.
 		 */
 		if (try_only_braille) {
 			if (!is_braille_console_preferred(pc))
 				continue;
 		} else {
-			if (pc->user_specified != user_specified)
+			if (pc->pref_type != pref_type)
 				continue;
 		}
 
@@ -4046,14 +4051,14 @@ static int __try_enable_preferred_console(struct console *newcon,
 }
 
 static int try_enable_preferred_console(struct console *newcon,
-					bool user_specified)
+					enum con_pref_type pref_type)
 {
-	return __try_enable_preferred_console(newcon, user_specified, false);
+	return __try_enable_preferred_console(newcon, pref_type, false);
 }
 
 static int try_enable_braille_console(struct console *newcon)
 {
-	return __try_enable_preferred_console(newcon, true, true);
+	return __try_enable_preferred_console(newcon, CON_PREF_CMDLINE, true);
 }
 
 /* Try to enable the console unconditionally */
@@ -4122,15 +4127,19 @@ static int try_enable_console(struct console *newcon)
 		}
 	}
 
-	/* See if this console matches one we selected on the command line */
-	err = try_enable_preferred_console(newcon, true);
+	err = try_enable_preferred_console(newcon, CON_PREF_CMDLINE);
 	if (err != -ENOENT)
 		return err;
 
-	/* If not, try to match against the platform default(s) */
-	err = try_enable_preferred_console(newcon, false);
+	err = try_enable_preferred_console(newcon, CON_PREF_PLATFORM_REQUEST);
 	if (err != -ENOENT)
 		return err;
+
+	if (!console_set_on_cmdline) {
+		err = try_enable_preferred_console(newcon, CON_PREF_PLATFORM_DEFAULT);
+		if (err != -ENOENT)
+			return err;
+	}
 
 	/*
 	 * Some consoles, such as pstore and netconsole, can be enabled even
