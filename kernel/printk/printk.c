@@ -4084,7 +4084,7 @@ static int try_enable_default_console(struct console *newcon)
 
 static int try_enable_console(struct console *newcon)
 {
-	int err;
+	int err = -ENOENT;
 
 	/*
 	 * First, try to enable the console driver as a Braille console.
@@ -4104,19 +4104,29 @@ static int try_enable_console(struct console *newcon)
 			return err;
 	}
 
-	/*
-	 * See if we want to enable this console driver by default.
-	 *
-	 * Nope when a console is preferred by the command line, device
-	 * tree, or SPCR.
-	 *
-	 * The first real console with tty binding (driver) wins. More
-	 * consoles might get enabled before the right one is found.
-	 *
-	 * Note that a console with tty binding will have CON_CONSDEV
-	 * flag set and will be first in the list.
-	 */
-	if (preferred_dev_console < 0) {
+	if (preferred_dev_console >= 0) {
+		/* See if this console matches one we selected on the command line */
+		err = try_enable_preferred_console(newcon, true);
+		if (err != -ENOENT)
+			return err;
+
+		/* If not, try to match against the platform default(s) */
+		err = try_enable_preferred_console(newcon, false);
+		if (err != -ENOENT)
+			return err;
+	} else {
+		/*
+		 * See if we want to enable this console driver by default.
+		 *
+		 * Nope when a console is preferred by the command line, device
+		 * tree, or SPCR.
+		 *
+		 * The first real console with tty binding (driver) wins. More
+		 * consoles might get enabled before the right one is found.
+		 *
+		 * Note that a console with tty binding will have CON_CONSDEV
+		 * flag set and will be first in the list.
+		 */
 		if (hlist_empty(&console_list) || !console_first()->device ||
 		    console_first()->flags & CON_BOOT) {
 			err = try_enable_default_console(newcon);
@@ -4125,14 +4135,11 @@ static int try_enable_console(struct console *newcon)
 		}
 	}
 
-	/* See if this console matches one we selected on the command line */
-	err = try_enable_preferred_console(newcon, true);
-	if (err != -ENOENT)
-		return err;
-
-	/* If not, try to match against the platform default(s) */
-	err = try_enable_preferred_console(newcon, false);
-	if (err != -ENOENT)
+	/*
+	 * Make sure that pre-enabled consoles won't get registered when
+	 * something went wrong.
+	 */
+	if (WARN_ON(err != -ENOENT))
 		return err;
 
 	/*
