@@ -356,7 +356,9 @@ int braille_register_console(struct console *console, int index,
 	if (braille_co)
 		return -ENODEV;
 	if (console->setup) {
+		console_lock();
 		ret = console->setup(console, console_options);
+		console_unlock();
 		if (ret != 0)
 			return ret;
 	}
